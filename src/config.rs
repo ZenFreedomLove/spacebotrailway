@@ -41,6 +41,8 @@ pub struct DefaultsConfig {
     pub context_window: usize,
     pub compaction: CompactionConfig,
     pub cortex: CortexConfig,
+    /// Number of messages to fetch from the platform when a new channel is created.
+    pub history_backfill_count: usize,
 }
 
 impl Default for DefaultsConfig {
@@ -52,6 +54,7 @@ impl Default for DefaultsConfig {
             context_window: 128_000,
             compaction: CompactionConfig::default(),
             cortex: CortexConfig::default(),
+            history_backfill_count: 50,
         }
     }
 }
@@ -123,6 +126,7 @@ pub struct ResolvedAgentConfig {
     pub context_window: usize,
     pub compaction: CompactionConfig,
     pub cortex: CortexConfig,
+    pub history_backfill_count: usize,
 }
 
 impl AgentConfig {
@@ -149,6 +153,7 @@ impl AgentConfig {
             context_window: self.context_window.unwrap_or(defaults.context_window),
             compaction: self.compaction.unwrap_or(defaults.compaction),
             cortex: self.cortex.unwrap_or(defaults.cortex),
+            history_backfill_count: defaults.history_backfill_count,
         }
     }
 }
@@ -162,6 +167,9 @@ impl ResolvedAgentConfig {
     }
     pub fn redb_path(&self) -> PathBuf {
         self.data_dir.join("config.redb")
+    }
+    pub fn history_backfill_count(&self) -> usize {
+        self.history_backfill_count
     }
 }
 
@@ -559,6 +567,7 @@ impl Config {
                         .unwrap_or(base_defaults.cortex.circuit_breaker_threshold),
                 })
                 .unwrap_or(base_defaults.cortex),
+            history_backfill_count: base_defaults.history_backfill_count,
         };
 
         let mut agents: Vec<AgentConfig> = toml

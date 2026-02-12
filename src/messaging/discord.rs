@@ -1,13 +1,13 @@
 //! Discord messaging adapter using serenity.
 
-use crate::messaging::traits::{InboundStream, Messaging};
+use crate::messaging::traits::{HistoryMessage, InboundStream, Messaging};
 use crate::{InboundMessage, MessageContent, OutboundResponse, StatusUpdate};
 
 use anyhow::Context as _;
 use async_trait::async_trait;
 use serenity::all::{
-    ChannelId, Context, EditMessage, EventHandler, GatewayIntents, GuildId, Http, Message, Ready,
-    ShardManager, UserId,
+    ChannelId, Context, EditMessage, EventHandler, GatewayIntents, GetMessages, GuildId, Http,
+    Message, MessageId, Ready, ShardManager, UserId,
 };
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -166,6 +166,9 @@ impl Messaging for DiscordAdapter {
             OutboundResponse::StreamEnd => {
                 self.active_messages.write().await.remove(&message.id);
             }
+            OutboundResponse::Status(status) => {
+                self.send_status(message, status).await?;
+            }
         }
 
         Ok(())
@@ -218,6 +221,58 @@ impl Messaging for DiscordAdapter {
         }
 
         Ok(())
+    }
+
+    async fn fetch_history(
+        &self,
+        message: &InboundMessage,
+        limit: usize,
+    ) -> crate::Result<Vec<HistoryMessage>> {
+        let http = self.get_http().await?;
+        let channel_id = self.extract_channel_id(message)?;
+
+        let message_id = message
+            .metadata
+            .get("discord_message_id")
+            .and_then(|v| v.as_u64())
+            .context("missing discord_message_id in metadata")?;
+
+        // Fetch messages before the triggering message (capped at 100 per Discord API)
+        let capped_limit = limit.min(100) as u8;
+        let builder = GetMessages::new()
+            .before(MessageId::new(message_id))
+            .limit(capped_limit);
+
+        let messages = channel_id
+            .messages(&*http, builder)
+            .await
+            .context("failed to fetch discord message history")?;
+
+        let bot_user_id = self.bot_user_id.read().await;
+
+        // Messages come back newest-first from Discord, reverse to chronological
+        let history: Vec<HistoryMessage> = messages
+            .iter()
+            .rev()
+            .map(|message| {
+                let is_bot = bot_user_id
+                    .map(|bot_id| message.author.id == bot_id)
+                    .unwrap_or(false);
+                HistoryMessage {
+                    author: message.author.name.clone(),
+                    content: message.content.clone(),
+                    is_bot,
+                }
+            })
+            .collect();
+
+        tracing::info!(
+            count = history.len(),
+            channel_id = %channel_id,
+            "fetched discord message history"
+        );
+
+        Ok(history)
     }
 
     async fn health_check(&self) -> crate::Result<()> {

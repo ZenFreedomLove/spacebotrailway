@@ -267,6 +267,35 @@ async fn main() -> anyhow::Result<()> {
                         event_rx,
                     );
 
+                    // Backfill recent message history from the platform
+                    let backfill_count = agent.config.history_backfill_count();
+                    if backfill_count > 0 {
+                        match messaging_manager.fetch_history(&message, backfill_count).await {
+                            Ok(history_messages) if !history_messages.is_empty() => {
+                                let mut transcript = String::from("[Previous conversation in this channel]\n\n");
+                                for entry in &history_messages {
+                                    let label = if entry.is_bot { "(you)" } else { &entry.author };
+                                    transcript.push_str(&format!("{}: {}\n", label, entry.content));
+                                }
+                                transcript.push_str("\n[End of previous conversation]");
+
+                                let mut history = channel.state.history.write().await;
+                                history.push(rig::message::Message::from(transcript));
+                                drop(history);
+
+                                tracing::info!(
+                                    conversation_id = %conversation_id,
+                                    message_count = history_messages.len(),
+                                    "backfilled channel history"
+                                );
+                            }
+                            Err(error) => {
+                                tracing::warn!(%error, "failed to backfill channel history");
+                            }
+                            _ => {}
+                        }
+                    }
+
                     // Spawn the channel's event loop
                     tokio::spawn(async move {
                         if let Err(error) = channel.run().await {
@@ -281,15 +310,27 @@ async fn main() -> anyhow::Result<()> {
                     let outbound_conversation_id = conversation_id.clone();
                     let outbound_handle = tokio::spawn(async move {
                         while let Some(response) = response_rx.recv().await {
-                            tracing::info!(
-                                conversation_id = %outbound_conversation_id,
-                                "routing outbound response to messaging adapter"
-                            );
-                            if let Err(error) = messaging_for_outbound
-                                .respond(&outbound_message, response)
-                                .await
-                            {
-                                tracing::error!(%error, "failed to send outbound response");
+                            match response {
+                                spacebot::OutboundResponse::Status(status) => {
+                                    if let Err(error) = messaging_for_outbound
+                                        .send_status(&outbound_message, status)
+                                        .await
+                                    {
+                                        tracing::warn!(%error, "failed to send status update");
+                                    }
+                                }
+                                response => {
+                                    tracing::info!(
+                                        conversation_id = %outbound_conversation_id,
+                                        "routing outbound response to messaging adapter"
+                                    );
+                                    if let Err(error) = messaging_for_outbound
+                                        .respond(&outbound_message, response)
+                                        .await
+                                    {
+                                        tracing::error!(%error, "failed to send outbound response");
+                                    }
+                                }
                             }
                         }
                     });

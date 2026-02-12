@@ -175,11 +175,15 @@ impl StatusBlock {
                     CompletedItemType::Branch => "branch",
                     CompletedItemType::Worker => "worker",
                 };
+                // Truncate long results to keep the status block manageable
+                let summary = if item.result_summary.len() > 500 {
+                    format!("{}...", &item.result_summary[..500])
+                } else {
+                    item.result_summary.clone()
+                };
                 output.push_str(&format!(
                     "- [{}] {}: {}\n",
-                    type_str,
-                    item.description,
-                    item.result_summary.lines().next().unwrap_or("done")
+                    type_str, item.description, summary,
                 ));
             }
             output.push('\n');

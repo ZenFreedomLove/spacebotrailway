@@ -74,6 +74,10 @@ pub struct Channel {
     pub event_rx: broadcast::Receiver<ProcessEvent>,
     /// Outbound response sender for the messaging layer.
     pub response_tx: mpsc::Sender<OutboundResponse>,
+    /// Self-sender for re-triggering the LLM after worker/branch completion.
+    pub self_tx: mpsc::Sender<InboundMessage>,
+    /// Conversation ID used for synthetic messages.
+    pub conversation_id: Option<String>,
 }
 
 impl Channel {
@@ -110,6 +114,7 @@ impl Channel {
             max_concurrent_branches: config.max_concurrent_branches,
         };
 
+        let self_tx = message_tx.clone();
         let channel = Self {
             id: id.clone(),
             title: None,
@@ -121,6 +126,8 @@ impl Channel {
             message_rx,
             event_rx,
             response_tx,
+            self_tx,
+            conversation_id: None,
         };
         
         (channel, message_tx)
@@ -155,12 +162,17 @@ impl Channel {
     /// The LLM decides which tools to call: reply (to respond), branch (to think),
     /// spawn_worker (to delegate), route (to follow up with a worker), cancel, or
     /// memory_save. The tools act on the channel's shared state directly.
-    async fn handle_message(&self, message: InboundMessage) -> Result<()> {
+    async fn handle_message(&mut self, message: InboundMessage) -> Result<()> {
         tracing::info!(
             channel_id = %self.id,
             message_id = %message.id,
             "handling message"
         );
+
+        // Track conversation_id for synthetic re-trigger messages
+        if self.conversation_id.is_none() {
+            self.conversation_id = Some(message.conversation_id.clone());
+        }
         
         let user_text = match &message.content {
             crate::MessageContent::Text(text) => text.clone(),
@@ -205,6 +217,9 @@ impl Channel {
             .default_max_turns(self.config.max_turns)
             .tool_server_handle(self.deps.tool_server.clone())
             .build();
+
+        // Signal typing indicator before the LLM starts generating
+        let _ = self.response_tx.send(OutboundResponse::Status(crate::StatusUpdate::Thinking)).await;
 
         // Run the agent loop with the channel's persistent history
         let mut history = self.state.history.write().await;
@@ -253,6 +268,8 @@ impl Channel {
             let mut status = self.state.status_block.write().await;
             status.update(&event);
         }
+
+        let mut should_retrigger = false;
         
         match &event {
             ProcessEvent::BranchResult { branch_id, conclusion, .. } => {
@@ -265,6 +282,7 @@ impl Channel {
                 let mut history = self.state.history.write().await;
                 let branch_message = format!("[Branch result]: {conclusion}");
                 history.push(rig::message::Message::from(branch_message));
+                should_retrigger = true;
                 
                 tracing::info!(branch_id = %branch_id, "branch result incorporated");
             }
@@ -276,11 +294,33 @@ impl Channel {
                     let mut history = self.state.history.write().await;
                     let worker_message = format!("[Worker completed]: {result}");
                     history.push(rig::message::Message::from(worker_message));
+                    should_retrigger = true;
                 }
                 
                 tracing::info!(worker_id = %worker_id, "worker completed");
             }
             _ => {}
+        }
+
+        // Re-trigger the channel LLM so it can process the result and respond
+        if should_retrigger {
+            if let Some(conversation_id) = &self.conversation_id {
+                let synthetic = InboundMessage {
+                    id: uuid::Uuid::new_v4().to_string(),
+                    source: "system".into(),
+                    conversation_id: conversation_id.clone(),
+                    sender_id: "system".into(),
+                    agent_id: None,
+                    content: crate::MessageContent::Text(
+                        "[System: a background process has completed. Check your history and status block for the result, then respond to the user.]".into()
+                    ),
+                    timestamp: chrono::Utc::now(),
+                    metadata: std::collections::HashMap::new(),
+                };
+                if let Err(error) = self.self_tx.try_send(synthetic) {
+                    tracing::warn!(%error, "failed to re-trigger channel after process completion");
+                }
+            }
         }
         
         Ok(())

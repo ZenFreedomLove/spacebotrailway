@@ -208,6 +208,7 @@ pub enum OutboundResponse {
     StreamStart,
     StreamChunk(String),
     StreamEnd,
+    Status(StatusUpdate),
 }
 
 /// Status updates for messaging platforms.

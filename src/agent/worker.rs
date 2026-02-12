@@ -211,10 +211,26 @@ impl Worker {
         }
 
         self.state = WorkerState::Done;
+        self.hook.send_status("summarizing");
+
+        // Summary phase: ask the worker to produce a concise result for the channel.
+        // The full tool history is in `history` so the LLM can reference everything.
+        // Single turn, no tools — just text.
+        let summary = match agent.prompt(SUMMARY_PROMPT)
+            .with_history(&mut history)
+            .max_turns(1)
+            .await
+        {
+            Ok(response) => response,
+            Err(error) => {
+                tracing::warn!(worker_id = %self.id, %error, "summary phase failed, using raw result");
+                result
+            }
+        };
+
         self.hook.send_status("completed");
-        
         tracing::info!(worker_id = %self.id, "worker completed");
-        Ok(result)
+        Ok(summary)
     }
     
     /// Check if worker is in a terminal state.
@@ -227,6 +243,14 @@ impl Worker {
         self.input_rx.is_some()
     }
 }
+
+/// Prompt sent after the task phase to get a concise summary for the channel.
+const SUMMARY_PROMPT: &str = "\
+Your task is complete. Now produce a concise summary of the result for the channel \
+that spawned you. The channel has limited context — do not dump raw file contents or \
+full command output. Instead, summarize what you did, what you found, and any key \
+details the channel needs. If the task was to retrieve specific information, include \
+the relevant parts — not the entire output. Keep it focused and useful. Do not use tools.";
 
 /// Extract the last assistant text message from a history.
 fn extract_last_assistant_text(history: &[rig::message::Message]) -> Option<String> {

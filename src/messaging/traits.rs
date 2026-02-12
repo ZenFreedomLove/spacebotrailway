@@ -8,6 +8,14 @@ use futures::Stream;
 /// Message stream type.
 pub type InboundStream = Pin<Box<dyn Stream<Item = InboundMessage> + Send>>;
 
+/// A message from platform history used for backfilling channel context.
+#[derive(Debug, Clone)]
+pub struct HistoryMessage {
+    pub author: String,
+    pub content: String,
+    pub is_bot: bool,
+}
+
 /// Static trait for messaging adapters.
 /// Use this for type-safe implementations.
 pub trait Messaging: Send + Sync + 'static {
@@ -40,6 +48,18 @@ pub trait Messaging: Send + Sync + 'static {
         response: OutboundResponse,
     ) -> impl std::future::Future<Output = Result<()>> + Send {
         async { Ok(()) }
+    }
+
+    /// Fetch recent message history from the platform for context backfill.
+    /// Returns messages in chronological order (oldest first).
+    /// `before` is the message that triggered channel creation — fetch messages before it.
+    fn fetch_history(
+        &self,
+        message: &InboundMessage,
+        limit: usize,
+    ) -> impl std::future::Future<Output = Result<Vec<HistoryMessage>>> + Send {
+        let _ = (message, limit);
+        async { Ok(Vec::new()) }
     }
     
     /// Health check.
@@ -75,6 +95,12 @@ pub trait MessagingDyn: Send + Sync + 'static {
         target: &'a str,
         response: OutboundResponse,
     ) -> Pin<Box<dyn std::future::Future<Output = Result<()>> + Send + 'a>>;
+
+    fn fetch_history<'a>(
+        &'a self,
+        message: &'a InboundMessage,
+        limit: usize,
+    ) -> Pin<Box<dyn std::future::Future<Output = Result<Vec<HistoryMessage>>> + Send + 'a>>;
     
     fn health_check<'a>(&'a self) -> Pin<Box<dyn std::future::Future<Output = Result<()>> + Send + 'a>>;
     
@@ -113,6 +139,14 @@ impl<T: Messaging> MessagingDyn for T {
         response: OutboundResponse,
     ) -> Pin<Box<dyn std::future::Future<Output = Result<()>> + Send + 'a>> {
         Box::pin(Messaging::broadcast(self, target, response))
+    }
+
+    fn fetch_history<'a>(
+        &'a self,
+        message: &'a InboundMessage,
+        limit: usize,
+    ) -> Pin<Box<dyn std::future::Future<Output = Result<Vec<HistoryMessage>>> + Send + 'a>> {
+        Box::pin(Messaging::fetch_history(self, message, limit))
     }
     
     fn health_check<'a>(&'a self) -> Pin<Box<dyn std::future::Future<Output = Result<()>> + Send + 'a>> {

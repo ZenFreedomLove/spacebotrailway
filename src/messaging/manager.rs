@@ -1,6 +1,6 @@
 //! MessagingManager: Fan-in and routing for all adapters.
 
-use crate::messaging::traits::{InboundStream, Messaging, MessagingDyn};
+use crate::messaging::traits::{HistoryMessage, InboundStream, Messaging, MessagingDyn};
 use crate::{InboundMessage, OutboundResponse, StatusUpdate};
 
 use anyhow::Context as _;
@@ -74,6 +74,19 @@ impl MessagingManager {
             .get(adapter_name)
             .with_context(|| format!("no messaging adapter named '{adapter_name}'"))?;
         adapter.broadcast(target, response).await
+    }
+
+    /// Fetch recent message history from the platform for context backfill.
+    pub async fn fetch_history(
+        &self,
+        message: &InboundMessage,
+        limit: usize,
+    ) -> crate::Result<Vec<HistoryMessage>> {
+        let adapter = self
+            .adapters
+            .get(&message.source)
+            .with_context(|| format!("no messaging adapter named '{}'", message.source))?;
+        adapter.fetch_history(message, limit).await
     }
 
     /// Shut down all adapters gracefully.
