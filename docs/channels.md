@@ -1,6 +1,6 @@
 # Channels
 
-Every conversation happens in a channel. A Discord text channel, a Slack thread, a webhook endpoint, a heartbeat execution. Channels are created on demand when the first message arrives and tracked in SQLite so the system knows what exists, what's active, and what to show in a UI.
+Every conversation happens in a channel. A Discord text channel, a Slack thread, a webhook endpoint, a cron job execution. Channels are created on demand when the first message arrives and tracked in SQLite so the system knows what exists, what's active, and what to show in a UI.
 
 ## Channel IDs
 
@@ -12,7 +12,7 @@ Channel IDs are colon-delimited strings with the platform as the first segment:
 | Discord (DM) | `discord:dm:{user_id}` | `discord:dm:302457623847329792` |
 | Slack | `slack:{team_id}:{channel_id}` | `slack:T01ABC:C02DEF` |
 | Slack (thread) | `slack:{team_id}:{channel_id}:{thread_ts}` | `slack:T01ABC:C02DEF:1234567890.123456` |
-| Heartbeat | `heartbeat:{heartbeat_id}` | `heartbeat:daily-summary` |
+| Cron | `cron:{cron_id}` | `cron:daily-summary` |
 | Webhook | `webhook:{endpoint}` | `webhook:github-ci` |
 
 The ID is the primary key in the `channels` table and is used everywhere internally as the `ChannelId` type (`Arc<str>`).
@@ -31,7 +31,7 @@ Message arrives from Discord
   → channels table now has the row
 ```
 
-On subsequent messages, the upsert runs again. It updates `display_name` and `platform_meta` if the metadata changed (e.g. a Discord channel rename) and bumps `last_activity_at`. The `COALESCE` in the upsert preserves existing values when the new message doesn't carry metadata — heartbeat messages have empty metadata, so they won't wipe out a display name set by an earlier Discord message.
+On subsequent messages, the upsert runs again. It updates `display_name` and `platform_meta` if the metadata changed (e.g. a Discord channel rename) and bumps `last_activity_at`. The `COALESCE` in the upsert preserves existing values when the new message doesn't carry metadata — cron job messages have empty metadata, so they won't wipe out a display name set by an earlier Discord message.
 
 Channels are never deleted. The `is_active` flag exists for soft archival in the future.
 
@@ -54,7 +54,7 @@ CREATE TABLE channels (
 | Column | Type | Description |
 |--------|------|-------------|
 | `id` | TEXT PK | The channel ID string (e.g. `discord:123:456`) |
-| `platform` | TEXT | Extracted from the ID prefix: `discord`, `slack`, `heartbeat`, `webhook` |
+| `platform` | TEXT | Extracted from the ID prefix: `discord`, `slack`, `cron`, `webhook` |
 | `display_name` | TEXT | Human-readable name from platform metadata (e.g. `#general`) |
 | `platform_meta` | TEXT (JSON) | Platform-specific metadata blob |
 | `bulletin` | TEXT | Reserved for per-channel memory bulletins |
@@ -87,7 +87,7 @@ The `platform_meta` column stores a JSON blob of platform-specific fields extrac
 }
 ```
 
-**Heartbeat / Webhook:** No metadata stored (empty JSON or null).
+**Cron / Webhook:** No metadata stored (empty JSON or null).
 
 ## ChannelStore
 

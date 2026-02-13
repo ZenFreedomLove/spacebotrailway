@@ -25,7 +25,7 @@ All 16 tools:
 | `file` | Read, write, and list files | Worker |
 | `exec` | Run subprocesses with specific args/env | Worker |
 | `browser` | Headless Chrome automation (navigate, click, screenshot) | Worker |
-| `heartbeat` | Manage scheduled heartbeat tasks | Channel |
+| `cron` | Manage scheduled cron jobs | Channel |
 
 ## ToolServer Topology
 
@@ -49,7 +49,7 @@ One per channel. Starts empty — tools are added and removed each conversation 
 │   cancel         (channel_id, event_tx) │
 │   skip           (skip_flag)            │
 │   react          (response_tx)          │
-│   heartbeat      (heartbeat_store)      │
+│   cron           (cron_store)           │
 └─────────────────────────────────────────┘
 ```
 

@@ -78,8 +78,8 @@ workspace = "/custom/workspace/path"   # optional, defaults to ~/.spacebot/agent
 [agents.routing]
 channel = "anthropic/claude-opus-4-20250514"
 
-# Per-agent heartbeats.
-[[agents.heartbeats]]
+# Per-agent cron jobs.
+[[agents.cron]]
 id = "daily-check"
 prompt = "Check in on ongoing projects and report status."
 interval_secs = 86400
@@ -199,7 +199,7 @@ A file watcher (via the `notify` crate) monitors:
 - Each agent's `workspace/prompts/` (prompt overrides)
 - Each agent's `workspace/skills/` (workspace-level skills)
 
-On file change, Spacebot re-reads the changed files and atomically swaps the new values into the live `RuntimeConfig` using `arc-swap`. All consumers (channels, branches, workers, compactors, heartbeats) read from `RuntimeConfig` on every use, so they pick up changes immediately.
+On file change, Spacebot re-reads the changed files and atomically swaps the new values into the live `RuntimeConfig` using `arc-swap`. All consumers (channels, branches, workers, compactors, cron jobs) read from `RuntimeConfig` on every use, so they pick up changes immediately.
 
 ```
 File change detected
@@ -336,17 +336,17 @@ Thresholds are fractions of `context_window`.
 
 Agent-specific routing is set via `[agents.routing]` with the same keys as `[defaults.routing]`.
 
-### `[[agents.heartbeats]]`
+### `[[agents.cron]]`
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| `id` | string | **required** | Heartbeat identifier |
+| `id` | string | **required** | Cron job identifier |
 | `prompt` | string | **required** | Prompt sent to a fresh channel on each tick |
 | `interval_secs` | integer | 3600 | Seconds between firings |
 | `delivery_target` | string | **required** | Where to send results (`adapter:target`) |
 | `active_start_hour` | integer | None | Start of active hours window (24h format) |
 | `active_end_hour` | integer | None | End of active hours window |
-| `enabled` | bool | true | Whether this heartbeat is active |
+| `enabled` | bool | true | Whether this cron job is active |
 
 ### `[messaging.discord]`
 

@@ -327,6 +327,12 @@ impl Worker {
         self.state = WorkerState::Done;
         self.hook.send_status("completed");
         
+        // Write success log based on the worker log mode setting
+        let log_mode = self.get_worker_log_mode();
+        if log_mode != crate::settings::WorkerLogMode::ErrorsOnly {
+            self.write_success_log(&history);
+        }
+        
         tracing::info!(worker_id = %self.id, "worker completed");
         Ok(result)
     }
@@ -402,17 +408,44 @@ impl Worker {
         self.input_rx.is_some()
     }
 
-    /// Write a structured log file to disk capturing the worker's execution
-    /// trace (task, history, error). Called on failure so we have something
-    /// to inspect after the fact.
-    fn write_failure_log(&self, history: &[rig::message::Message], error: &str) {
-        let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S");
-        let filename = format!("worker_{}_{}.log", self.id, timestamp);
-        let path = self.logs_dir.join(&filename);
+    /// Get the current worker log mode from settings.
+    /// Defaults to ErrorsOnly if settings are not available.
+    fn get_worker_log_mode(&self) -> crate::settings::WorkerLogMode {
+        self.deps
+            .runtime_config
+            .settings
+            .load()
+            .as_ref()
+            .as_ref()
+            .map(|s| s.worker_log_mode())
+            .unwrap_or_default()
+    }
 
+    /// Get the log directory path based on the log mode and success/failure.
+    /// For AllSeparate mode, uses "failed" or "successful" subdirectories.
+    fn get_log_directory(&self, is_success: bool) -> PathBuf {
+        let mode = self.get_worker_log_mode();
+        
+        match mode {
+            crate::settings::WorkerLogMode::AllSeparate => {
+                let subdir = if is_success { "successful" } else { "failed" };
+                self.logs_dir.join(subdir)
+            }
+            _ => self.logs_dir.clone(),
+        }
+    }
+
+    /// Build the log content for a worker execution.
+    /// Shared logic for both success and failure logs.
+    fn build_log_content(&self, history: &[rig::message::Message], error: Option<&str>) -> String {
         let mut log = String::with_capacity(4096);
 
-        let _ = writeln!(log, "=== Worker Failure Log ===");
+        let log_type = if error.is_some() {
+            "Failure"
+        } else {
+            "Success"
+        };
+        let _ = writeln!(log, "=== Worker {log_type} Log ===");
         let _ = writeln!(log, "Worker ID: {}", self.id);
         if let Some(channel_id) = &self.channel_id {
             let _ = writeln!(log, "Channel ID: {channel_id}");
@@ -422,9 +455,13 @@ impl Worker {
         let _ = writeln!(log);
         let _ = writeln!(log, "--- Task ---");
         let _ = writeln!(log, "{}", self.task);
-        let _ = writeln!(log);
-        let _ = writeln!(log, "--- Error ---");
-        let _ = writeln!(log, "{error}");
+        
+        if let Some(err) = error {
+            let _ = writeln!(log);
+            let _ = writeln!(log, "--- Error ---");
+            let _ = writeln!(log, "{err}");
+        }
+        
         let _ = writeln!(log);
         let _ = writeln!(log, "--- History ({} messages) ---", history.len());
 
@@ -487,8 +524,50 @@ impl Worker {
             }
         }
 
-        // Best-effort write — don't propagate errors from logging
-        if let Err(write_error) = std::fs::create_dir_all(&self.logs_dir)
+        log
+    }
+
+    /// Write a structured log file for a successful worker execution.
+    fn write_success_log(&self, history: &[rig::message::Message]) {
+        let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S");
+        let filename = format!("worker_{}_{}.log", self.id, timestamp);
+        let log_dir = self.get_log_directory(true);
+        let path = log_dir.join(&filename);
+
+        let log = self.build_log_content(history, None);
+
+        // Best-effort write
+        if let Err(write_error) = std::fs::create_dir_all(&log_dir)
+            .and_then(|()| std::fs::write(&path, &log))
+        {
+            tracing::warn!(
+                worker_id = %self.id,
+                path = %path.display(),
+                %write_error,
+                "failed to write worker success log"
+            );
+        } else {
+            tracing::info!(
+                worker_id = %self.id,
+                path = %path.display(),
+                "worker success log written"
+            );
+        }
+    }
+
+    /// Write a structured log file to disk capturing the worker's execution
+    /// trace (task, history, error). Called on failure so we have something
+    /// to inspect after the fact.
+    fn write_failure_log(&self, history: &[rig::message::Message], error: &str) {
+        let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S");
+        let filename = format!("worker_{}_{}.log", self.id, timestamp);
+        let log_dir = self.get_log_directory(false);
+        let path = log_dir.join(&filename);
+
+        let log = self.build_log_content(history, Some(error));
+
+        // Best-effort write
+        if let Err(write_error) = std::fs::create_dir_all(&log_dir)
             .and_then(|()| std::fs::write(&path, &log))
         {
             tracing::warn!(

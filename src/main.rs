@@ -288,6 +288,13 @@ async fn run(config: spacebot::config::Config, foreground: bool) -> anyhow::Resu
             .await
             .with_context(|| format!("failed to connect databases for agent '{}'", agent_config.id))?;
 
+        // Per-agent settings store (redb-backed)
+        let settings_path = agent_config.data_dir.join("settings.redb");
+        let settings_store = Arc::new(
+            spacebot::settings::SettingsStore::new(&settings_path)
+                .with_context(|| format!("failed to initialize settings store for agent '{}'", agent_config.id))?
+        );
+
         // Per-agent memory system
         let memory_store = spacebot::memory::MemoryStore::new(db.sqlite.clone());
         let embedding_table = spacebot::memory::EmbeddingTable::open_or_create(&db.lance)
@@ -324,12 +331,16 @@ async fn run(config: spacebot::config::Config, foreground: bool) -> anyhow::Resu
 
         // Build the RuntimeConfig with all hot-reloadable values
         let runtime_config = Arc::new(spacebot::config::RuntimeConfig::new(
+            &config.instance_dir,
             agent_config,
             &config.defaults,
             prompt_engine.clone(),
             identity,
             skills,
         ));
+
+        // Set the settings store in RuntimeConfig
+        runtime_config.set_settings(settings_store);
 
         watcher_agents.push((
             agent_config.id.clone(),
@@ -341,7 +352,7 @@ async fn run(config: spacebot::config::Config, foreground: bool) -> anyhow::Resu
             agent_id: agent_id.clone(),
             memory_search,
             llm_manager: llm_manager.clone(),
-            heartbeat_tool: None,
+            cron_tool: None,
             runtime_config,
             event_tx,
             sqlite_pool: db.sqlite.clone(),
@@ -406,33 +417,33 @@ async fn run(config: spacebot::config::Config, foreground: bool) -> anyhow::Resu
 
     tracing::info!("messaging adapters started");
 
-    // Initialize heartbeat schedulers for each agent
-    let mut heartbeat_schedulers = Vec::new();
+    // Initialize cron schedulers for each agent
+    let mut cron_schedulers = Vec::new();
     for (agent_id, agent) in &mut agents {
-        let store = Arc::new(spacebot::heartbeat::HeartbeatStore::new(agent.db.sqlite.clone()));
+        let store = Arc::new(spacebot::cron::CronStore::new(agent.db.sqlite.clone()));
 
-        // Seed heartbeats from config into the database
-        for heartbeat_def in &agent.config.heartbeats {
-            let hb_config = spacebot::heartbeat::HeartbeatConfig {
-                id: heartbeat_def.id.clone(),
-                prompt: heartbeat_def.prompt.clone(),
-                interval_secs: heartbeat_def.interval_secs,
-                delivery_target: heartbeat_def.delivery_target.clone(),
-                active_hours: heartbeat_def.active_hours,
-                enabled: heartbeat_def.enabled,
+        // Seed cron jobs from config into the database
+        for cron_def in &agent.config.cron {
+            let cron_config = spacebot::cron::CronConfig {
+                id: cron_def.id.clone(),
+                prompt: cron_def.prompt.clone(),
+                interval_secs: cron_def.interval_secs,
+                delivery_target: cron_def.delivery_target.clone(),
+                active_hours: cron_def.active_hours,
+                enabled: cron_def.enabled,
             };
-            if let Err(error) = store.save(&hb_config).await {
+            if let Err(error) = store.save(&cron_config).await {
                 tracing::warn!(
                     agent_id = %agent_id,
-                    heartbeat_id = %heartbeat_def.id,
+                    cron_id = %cron_def.id,
                     %error,
-                    "failed to seed heartbeat config"
+                    "failed to seed cron config"
                 );
             }
         }
 
-        // Load all enabled heartbeats and start the scheduler
-        let heartbeat_context = spacebot::heartbeat::HeartbeatContext {
+        // Load all enabled cron jobs and start the scheduler
+        let cron_context = spacebot::cron::CronContext {
             deps: agent.deps.clone(),
             screenshot_dir: agent.config.screenshot_dir(),
             logs_dir: agent.config.logs_dir(),
@@ -440,30 +451,30 @@ async fn run(config: spacebot::config::Config, foreground: bool) -> anyhow::Resu
             store: store.clone(),
         };
 
-        let scheduler = Arc::new(spacebot::heartbeat::Scheduler::new(heartbeat_context));
+        let scheduler = Arc::new(spacebot::cron::Scheduler::new(cron_context));
 
-        // Make heartbeat store and scheduler available via RuntimeConfig
-        agent.deps.runtime_config.set_heartbeat(store.clone(), scheduler.clone());
+        // Make cron store and scheduler available via RuntimeConfig
+        agent.deps.runtime_config.set_cron(store.clone(), scheduler.clone());
 
         match store.load_all().await {
             Ok(configs) => {
-                for hb_config in configs {
-                    if let Err(error) = scheduler.register(hb_config).await {
-                        tracing::warn!(agent_id = %agent_id, %error, "failed to register heartbeat");
+                for cron_config in configs {
+                    if let Err(error) = scheduler.register(cron_config).await {
+                        tracing::warn!(agent_id = %agent_id, %error, "failed to register cron job");
                     }
                 }
             }
             Err(error) => {
-                tracing::warn!(agent_id = %agent_id, %error, "failed to load heartbeats from database");
+                tracing::warn!(agent_id = %agent_id, %error, "failed to load cron jobs from database");
             }
         }
 
-        // Store heartbeat tool on deps so each channel can register it on its own tool server
-        let heartbeat_tool = spacebot::tools::HeartbeatTool::new(store, scheduler.clone());
-        agent.deps.heartbeat_tool = Some(heartbeat_tool);
+        // Store cron tool on deps so each channel can register it on its own tool server
+        let cron_tool = spacebot::tools::CronTool::new(store, scheduler.clone());
+        agent.deps.cron_tool = Some(cron_tool);
 
-        heartbeat_schedulers.push(scheduler);
-        tracing::info!(agent_id = %agent_id, "heartbeat scheduler started");
+        cron_schedulers.push(scheduler);
+        tracing::info!(agent_id = %agent_id, "cron scheduler started");
     }
 
     // Start memory ingestion loops for each agent
@@ -661,10 +672,10 @@ async fn run(config: spacebot::config::Config, foreground: bool) -> anyhow::Resu
     // Graceful shutdown
     drop(active_channels);
 
-    for scheduler in &heartbeat_schedulers {
+    for scheduler in &cron_schedulers {
         scheduler.shutdown().await;
     }
-    drop(heartbeat_schedulers);
+    drop(cron_schedulers);
 
     messaging_manager.shutdown().await;
 

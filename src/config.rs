@@ -50,7 +50,7 @@ pub struct DefaultsConfig {
     /// Brave Search API key for web search tool. Supports "env:VAR_NAME" references.
     pub brave_search_key: Option<String>,
     pub history_backfill_count: usize,
-    pub heartbeats: Vec<HeartbeatDef>,
+    pub cron: Vec<CronDef>,
     pub opencode: OpenCodeConfig,
 }
 
@@ -227,13 +227,13 @@ pub struct AgentConfig {
     pub browser: Option<BrowserConfig>,
     /// Per-agent Brave Search API key override. None inherits from defaults.
     pub brave_search_key: Option<String>,
-    /// Heartbeat definitions for this agent.
-    pub heartbeats: Vec<HeartbeatDef>,
+    /// Cron job definitions for this agent.
+    pub cron: Vec<CronDef>,
 }
 
-/// A heartbeat definition from config.
+/// A cron job definition from config.
 #[derive(Debug, Clone)]
-pub struct HeartbeatDef {
+pub struct CronDef {
     pub id: String,
     pub prompt: String,
     pub interval_secs: u64,
@@ -264,7 +264,7 @@ pub struct ResolvedAgentConfig {
     pub brave_search_key: Option<String>,
     /// Number of messages to fetch from the platform when a new channel is created.
     pub history_backfill_count: usize,
-    pub heartbeats: Vec<HeartbeatDef>,
+    pub cron: Vec<CronDef>,
 }
 
 impl Default for DefaultsConfig {
@@ -282,7 +282,7 @@ impl Default for DefaultsConfig {
             browser: BrowserConfig::default(),
             brave_search_key: None,
             history_backfill_count: 50,
-            heartbeats: Vec::new(),
+            cron: Vec::new(),
             opencode: OpenCodeConfig::default(),
         }
     }
@@ -326,7 +326,7 @@ impl AgentConfig {
                 .clone()
                 .or_else(|| defaults.brave_search_key.clone()),
             history_backfill_count: defaults.history_backfill_count,
-            heartbeats: self.heartbeats.clone(),
+            cron: self.cron.clone(),
         }
     }
 }
@@ -745,11 +745,11 @@ struct TomlAgentConfig {
     context_window: Option<usize>,
     brave_search_key: Option<String>,
     #[serde(default)]
-    heartbeats: Vec<TomlHeartbeatDef>,
+    cron: Vec<TomlCronDef>,
 }
 
 #[derive(Deserialize)]
-struct TomlHeartbeatDef {
+struct TomlCronDef {
     id: String,
     prompt: String,
     interval_secs: Option<u64>,
@@ -943,7 +943,7 @@ impl Config {
             cortex: None,
             browser: None,
             brave_search_key: None,
-            heartbeats: Vec::new(),
+            cron: Vec::new(),
         }];
 
         Ok(Self {
@@ -1090,7 +1090,7 @@ impl Config {
                 .and_then(resolve_env_value)
                 .or_else(|| std::env::var("BRAVE_SEARCH_API_KEY").ok()),
             history_backfill_count: base_defaults.history_backfill_count,
-            heartbeats: base_defaults.heartbeats,
+            cron: Vec::new(),
             opencode: toml
                 .defaults
                 .opencode
@@ -1133,10 +1133,10 @@ impl Config {
                     .routing
                     .map(|r| resolve_routing(Some(r), &defaults.routing));
 
-                let heartbeats = a
-                    .heartbeats
+                let cron = a
+                    .cron
                     .into_iter()
-                    .map(|h| HeartbeatDef {
+                    .map(|h| CronDef {
                         id: h.id,
                         prompt: h.prompt,
                         interval_secs: h.interval_secs.unwrap_or(3600),
@@ -1164,7 +1164,7 @@ impl Config {
                     cortex: None,
                     browser: None,
                     brave_search_key: a.brave_search_key.as_deref().and_then(resolve_env_value),
-                    heartbeats,
+                    cron,
                 }
             })
             .collect();
@@ -1185,7 +1185,7 @@ impl Config {
                 cortex: None,
                 browser: None,
                 brave_search_key: None,
-                heartbeats: Vec::new(),
+                cron: Vec::new(),
             });
         }
 
@@ -1285,6 +1285,10 @@ impl Config {
 /// individual fields to get a snapshot — cheap and contention-free.
 /// The file watcher calls `.store()` to atomically swap in new values.
 pub struct RuntimeConfig {
+    /// Instance root directory (e.g., ~/.spacebot). Immutable after startup.
+    pub instance_dir: PathBuf,
+    /// Agent workspace directory (e.g., ~/.spacebot/agents/{id}/workspace). Immutable after startup.
+    pub workspace_dir: PathBuf,
     pub routing: ArcSwap<RoutingConfig>,
     pub compaction: ArcSwap<CompactionConfig>,
     pub memory_persistence: ArcSwap<MemoryPersistenceConfig>,
@@ -1305,15 +1309,18 @@ pub struct RuntimeConfig {
     pub opencode: ArcSwap<OpenCodeConfig>,
     /// Shared pool of OpenCode server processes. Lazily initialized on first use.
     pub opencode_server_pool: Arc<crate::opencode::OpenCodeServerPool>,
-    /// Heartbeat store, set after agent initialization.
-    pub heartbeat_store: ArcSwap<Option<Arc<crate::heartbeat::HeartbeatStore>>>,
-    /// Heartbeat scheduler, set after agent initialization.
-    pub heartbeat_scheduler: ArcSwap<Option<Arc<crate::heartbeat::Scheduler>>>,
+    /// Cron store, set after agent initialization.
+    pub cron_store: ArcSwap<Option<Arc<crate::cron::CronStore>>>,
+    /// Cron scheduler, set after agent initialization.
+    pub cron_scheduler: ArcSwap<Option<Arc<crate::cron::Scheduler>>>,
+    /// Settings store for agent-specific configuration.
+    pub settings: ArcSwap<Option<Arc<crate::settings::SettingsStore>>>,
 }
 
 impl RuntimeConfig {
     /// Build from a resolved agent config, loaded prompts, identity, and skills.
     pub fn new(
+        instance_dir: &Path,
         agent_config: &ResolvedAgentConfig,
         defaults: &DefaultsConfig,
         prompts: crate::prompts::PromptEngine,
@@ -1328,6 +1335,8 @@ impl RuntimeConfig {
         );
 
         Self {
+            instance_dir: instance_dir.to_path_buf(),
+            workspace_dir: agent_config.workspace.clone(),
             routing: ArcSwap::from_pointee(agent_config.routing.clone()),
             compaction: ArcSwap::from_pointee(agent_config.compaction),
             memory_persistence: ArcSwap::from_pointee(agent_config.memory_persistence),
@@ -1345,19 +1354,25 @@ impl RuntimeConfig {
             skills: ArcSwap::from_pointee(skills),
             opencode: ArcSwap::from_pointee(defaults.opencode.clone()),
             opencode_server_pool: Arc::new(server_pool),
-            heartbeat_store: ArcSwap::from_pointee(None),
-            heartbeat_scheduler: ArcSwap::from_pointee(None),
+            cron_store: ArcSwap::from_pointee(None),
+            cron_scheduler: ArcSwap::from_pointee(None),
+            settings: ArcSwap::from_pointee(None),
         }
     }
 
-    /// Set the heartbeat store and scheduler after initialization.
-    pub fn set_heartbeat(
+    /// Set the cron store and scheduler after initialization.
+    pub fn set_cron(
         &self,
-        store: Arc<crate::heartbeat::HeartbeatStore>,
-        scheduler: Arc<crate::heartbeat::Scheduler>,
+        store: Arc<crate::cron::CronStore>,
+        scheduler: Arc<crate::cron::Scheduler>,
     ) {
-        self.heartbeat_store.store(Arc::new(Some(store)));
-        self.heartbeat_scheduler.store(Arc::new(Some(scheduler)));
+        self.cron_store.store(Arc::new(Some(store)));
+        self.cron_scheduler.store(Arc::new(Some(scheduler)));
+    }
+
+    /// Set the settings store after initialization.
+    pub fn set_settings(&self, settings: Arc<crate::settings::SettingsStore>) {
+        self.settings.store(Arc::new(Some(settings)));
     }
 
     /// Reload tunable config values from a freshly parsed Config.

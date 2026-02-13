@@ -1,30 +1,30 @@
-//! Heartbeat CRUD storage (SQLite).
+//! Cron job CRUD storage (SQLite).
 
+use crate::cron::scheduler::CronConfig;
 use crate::error::Result;
-use crate::heartbeat::scheduler::HeartbeatConfig;
 use anyhow::Context as _;
 use sqlx::SqlitePool;
 
-/// Heartbeat store for persistence.
+/// Cron job store for persistence.
 #[derive(Debug)]
-pub struct HeartbeatStore {
+pub struct CronStore {
     pool: SqlitePool,
 }
 
-impl HeartbeatStore {
-    /// Create a new heartbeat store.
+impl CronStore {
+    /// Create a new cron store.
     pub fn new(pool: SqlitePool) -> Self {
         Self { pool }
     }
-    
-    /// Save a heartbeat configuration.
-    pub async fn save(&self, config: &HeartbeatConfig) -> Result<()> {
+
+    /// Save a cron job configuration.
+    pub async fn save(&self, config: &CronConfig) -> Result<()> {
         let active_start = config.active_hours.map(|h| h.0 as i64);
         let active_end = config.active_hours.map(|h| h.1 as i64);
-        
+
         sqlx::query(
             r#"
-            INSERT INTO heartbeats (id, prompt, interval_secs, delivery_target, active_start_hour, active_end_hour, enabled)
+            INSERT INTO cron_jobs (id, prompt, interval_secs, delivery_target, active_start_hour, active_end_hour, enabled)
             VALUES (?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 prompt = excluded.prompt,
@@ -44,28 +44,28 @@ impl HeartbeatStore {
         .bind(config.enabled as i64)
         .execute(&self.pool)
         .await
-        .context("failed to save heartbeat")?;
-        
+        .context("failed to save cron job")?;
+
         Ok(())
     }
-    
-    /// Load all heartbeat configurations.
-    pub async fn load_all(&self) -> Result<Vec<HeartbeatConfig>> {
+
+    /// Load all enabled cron job configurations.
+    pub async fn load_all(&self) -> Result<Vec<CronConfig>> {
         let rows = sqlx::query(
             r#"
             SELECT id, prompt, interval_secs, delivery_target, active_start_hour, active_end_hour, enabled
-            FROM heartbeats
+            FROM cron_jobs
             WHERE enabled = 1
             ORDER BY created_at ASC
             "#
         )
         .fetch_all(&self.pool)
         .await
-        .context("failed to load heartbeats")?;
-        
+        .context("failed to load cron jobs")?;
+
         let configs = rows
             .into_iter()
-            .map(|row| HeartbeatConfig {
+            .map(|row| CronConfig {
                 id: row.try_get("id").unwrap_or_default(),
                 prompt: row.try_get("prompt").unwrap_or_default(),
                 interval_secs: row.try_get::<i64, _>("interval_secs").unwrap_or(3600) as u64,
@@ -81,37 +81,37 @@ impl HeartbeatStore {
                 enabled: row.try_get::<i64, _>("enabled").unwrap_or(1) != 0,
             })
             .collect();
-        
+
         Ok(configs)
     }
-    
-    /// Delete a heartbeat.
+
+    /// Delete a cron job.
     pub async fn delete(&self, id: &str) -> Result<()> {
-        sqlx::query("DELETE FROM heartbeats WHERE id = ?")
+        sqlx::query("DELETE FROM cron_jobs WHERE id = ?")
             .bind(id)
             .execute(&self.pool)
             .await
-            .context("failed to delete heartbeat")?;
-        
+            .context("failed to delete cron job")?;
+
         Ok(())
     }
 
-    /// Update the enabled state of a heartbeat (used by circuit breaker).
+    /// Update the enabled state of a cron job (used by circuit breaker).
     pub async fn update_enabled(&self, id: &str, enabled: bool) -> Result<()> {
-        sqlx::query("UPDATE heartbeats SET enabled = ? WHERE id = ?")
+        sqlx::query("UPDATE cron_jobs SET enabled = ? WHERE id = ?")
             .bind(enabled as i64)
             .bind(id)
             .execute(&self.pool)
             .await
-            .context("failed to update heartbeat enabled state")?;
+            .context("failed to update cron job enabled state")?;
 
         Ok(())
     }
 
-    /// Log a heartbeat execution result.
+    /// Log a cron job execution result.
     pub async fn log_execution(
         &self,
-        heartbeat_id: &str,
+        cron_id: &str,
         success: bool,
         result_summary: Option<&str>,
     ) -> Result<()> {
@@ -119,17 +119,17 @@ impl HeartbeatStore {
 
         sqlx::query(
             r#"
-            INSERT INTO heartbeat_executions (id, heartbeat_id, success, result_summary)
+            INSERT INTO cron_executions (id, cron_id, success, result_summary)
             VALUES (?, ?, ?, ?)
             "#,
         )
         .bind(&execution_id)
-        .bind(heartbeat_id)
+        .bind(cron_id)
         .bind(success as i64)
         .bind(result_summary)
         .execute(&self.pool)
         .await
-        .context("failed to log heartbeat execution")?;
+        .context("failed to log cron execution")?;
 
         Ok(())
     }

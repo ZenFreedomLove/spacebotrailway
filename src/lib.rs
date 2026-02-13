@@ -6,7 +6,7 @@ pub mod conversation;
 pub mod daemon;
 pub mod db;
 pub mod error;
-pub mod heartbeat;
+pub mod cron;
 pub mod hooks;
 pub mod identity;
 pub mod llm;
@@ -150,7 +150,7 @@ pub struct AgentDeps {
     pub agent_id: AgentId,
     pub memory_search: Arc<memory::MemorySearch>,
     pub llm_manager: Arc<llm::LlmManager>,
-    pub heartbeat_tool: Option<tools::HeartbeatTool>,
+    pub cron_tool: Option<tools::CronTool>,
     pub runtime_config: Arc<config::RuntimeConfig>,
     pub event_tx: tokio::sync::broadcast::Sender<ProcessEvent>,
     pub sqlite_pool: sqlx::SqlitePool,

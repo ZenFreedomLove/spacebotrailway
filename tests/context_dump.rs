@@ -68,7 +68,7 @@ async fn bootstrap_deps() -> anyhow::Result<(spacebot::AgentDeps, spacebot::conf
     .await;
 
     let runtime_config = Arc::new(spacebot::config::RuntimeConfig::new(
-        agent_config, &config.defaults, prompts, identity, skills,
+        &config.instance_dir, agent_config, &config.defaults, prompts, identity, skills,
     ));
 
     let (event_tx, _) = tokio::sync::broadcast::channel(16);
@@ -79,7 +79,7 @@ async fn bootstrap_deps() -> anyhow::Result<(spacebot::AgentDeps, spacebot::conf
         agent_id,
         memory_search,
         llm_manager,
-        heartbeat_tool: None,
+        cron_tool: None,
         runtime_config,
         event_tx,
         sqlite_pool: db.sqlite.clone(),

@@ -175,7 +175,7 @@ fn row_to_channel_info(row: sqlx::sqlite::SqliteRow) -> ChannelInfo {
 
 /// Extract the platform name from a channel ID.
 ///
-/// "discord:123:456" -> "discord", "slack:T01:C01" -> "slack", "heartbeat:daily" -> "heartbeat"
+/// "discord:123:456" -> "discord", "slack:T01:C01" -> "slack", "cron:daily" -> "cron"
 fn extract_platform(channel_id: &str) -> String {
     channel_id
         .split(':')

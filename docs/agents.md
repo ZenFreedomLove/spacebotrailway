@@ -33,7 +33,7 @@ An agent does NOT have its own LLM provider credentials, its own binary, or its 
 │   │   │   └── prompts/                  # optional prompt overrides
 │   │   │       └── CHANNEL.md            # overrides shared prompts/CHANNEL.md
 │   │   ├── data/
-│   │   │   ├── spacebot.db              # SQLite (memories, conversations, heartbeats)
+│   │   │   ├── spacebot.db              # SQLite (memories, conversations, cron jobs)
 │   │   │   ├── lancedb/                 # LanceDB (embeddings, FTS)
 │   │   │   └── config.redb             # redb (agent-level settings, secrets)
 │   │   └── archives/                    # compaction transcripts

@@ -122,7 +122,7 @@ A separate service that manages the fleet. This is NOT Spacebot — it's a stand
 1. **User signup** — create account, choose a plan
 2. **Onboarding wizard** — connect messaging platforms, set identity, pick models
 3. **Provision** — create Fly App + Machine + Volume, generate `config.toml`, start the machine
-4. **Dashboard** — agent management, memory browser, conversation history, heartbeat config
+4. **Dashboard** — agent management, memory browser, conversation history, cron config
 5. **Settings** — update identity files, model preferences, messaging connections
 6. **Billing** — subscription tiers + optional pay-per-use LLM billing
 7. **Monitoring** — machine health, restart on crash, usage metrics
@@ -173,8 +173,8 @@ Option B is better. The webhook adapter already exists in the architecture. Exte
 - View branch and worker activity per conversation
 - Compaction history
 
-**Heartbeats:**
-- Create/edit/delete heartbeats
+**Cron jobs:**
+- Create/edit/delete cron jobs
 - View execution history and circuit breaker status
 - Set active hours and delivery targets
 
@@ -280,7 +280,7 @@ Get one user running on Fly with a manually provisioned machine.
 
 - Memory browser
 - Conversation history viewer
-- Heartbeat management
+- Cron job management
 - Identity file editor
 - LLM usage tracking
 

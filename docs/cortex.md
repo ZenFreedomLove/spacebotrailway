@@ -121,9 +121,9 @@ Branch 3 emits: ToolCompleted { tool: "memory_save" }    → cortex maps to Memo
 
 The cortex is the only singleton in the system (per agent). There's one cortex per agent, regardless of how many channels, branches, or workers are running.
 
-## Cortex vs Heartbeats
+## Cortex vs Cron Jobs
 
-**Heartbeats** are user-defined scheduled tasks. "Check my inbox every 30 minutes." They run on schedules, get fresh channels with full capabilities, and produce user-facing output.
+**Cron jobs** are user-defined scheduled tasks. "Check my inbox every 30 minutes." They run on schedules, get fresh channels with full capabilities, and produce user-facing output.
 
 **The cortex** is the system's internal loop. It maintains system health, memory coherence, and the memory bulletin. It runs continuously, doesn't produce user-facing output, and isn't user-configured beyond tuning intervals.
 

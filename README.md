@@ -153,11 +153,11 @@ Memories are structured objects, not files. Every memory is a row in SQLite with
 - **Three creation paths** — Branch-initiated, compactor-initiated, cortex-initiated
 - **Importance scoring** — Access frequency, recency, graph centrality. Identity memories exempt from decay.
 
-### Heartbeats
+### Cron Jobs
 
-Scheduled recurring tasks. Each heartbeat gets a fresh short-lived channel with full branching and worker capabilities.
+Scheduled recurring tasks. Each cron job gets a fresh short-lived channel with full branching and worker capabilities.
 
-- Multiple heartbeats run independently at different intervals
+- Multiple cron jobs run independently at different intervals
 - Stored in the database, created via config, conversation, or programmatically
 - Circuit breaker auto-disables after 3 consecutive failures
 - Active hours support with midnight wrapping
@@ -225,7 +225,7 @@ The binary creates all databases and directories automatically on first run. See
 | Language | **Rust** (edition 2024) |
 | Async runtime | **Tokio** |
 | LLM framework | **[Rig](https://github.com/0xPlaygrounds/rig)** v0.30 — agentic loop, tool execution, hooks |
-| Relational data | **SQLite** (sqlx) — conversations, memory graph, heartbeats |
+| Relational data | **SQLite** (sqlx) — conversations, memory graph, cron jobs |
 | Vector + FTS | **[LanceDB](https://lancedb.github.io/lancedb/)** — embeddings (HNSW), full-text (Tantivy), hybrid search (RRF) |
 | Key-value | **[redb](https://github.com/cberner/redb)** — settings, encrypted secrets |
 | Embeddings | **FastEmbed** — local embedding generation |
@@ -256,7 +256,7 @@ spacebot/
 │   ├── llm/                 # Model routing, provider clients, SpacebotModel
 │   ├── messaging/           # Discord, Slack, Telegram, webhook adapters
 │   ├── conversation/        # History persistence, context assembly
-│   ├── heartbeat/           # Scheduler, store
+│   ├── cron/                # Scheduler, store
 │   ├── identity/            # SOUL.md, IDENTITY.md, USER.md loading
 │   ├── opencode/            # OpenCode subprocess worker integration
 │   ├── secrets/             # Encrypted credential storage (redb)
@@ -282,7 +282,7 @@ spacebot/
 | [Tools](docs/tools.md) | All available LLM tools |
 | [Compaction](docs/compaction.md) | Context window management |
 | [Cortex](docs/cortex.md) | Memory bulletin and system observation |
-| [Heartbeats](docs/heartbeats.md) | Scheduled recurring tasks |
+| [Cron Jobs](docs/cron.md) | Scheduled recurring tasks |
 | [Routing](docs/routing.md) | Model routing and fallback chains |
 | [Messaging](docs/messaging.md) | Adapter architecture (Discord, Slack, Telegram, webhook) |
 | [Discord Setup](docs/discord-setup.md) | Discord bot setup guide |

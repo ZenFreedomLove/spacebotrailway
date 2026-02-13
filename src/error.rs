@@ -26,6 +26,9 @@ pub enum Error {
     #[error(transparent)]
     Secrets(#[from] SecretsError),
 
+    #[error(transparent)]
+    Settings(#[from] SettingsError),
+
     #[error("database error: {0}")]
     Sqlx(#[from] sqlx::Error),
 
@@ -175,4 +178,20 @@ pub enum SecretsError {
 
     #[error(transparent)]
     Other(#[from] anyhow::Error),
+}
+
+/// Settings storage errors.
+#[derive(Debug, thiserror::Error)]
+pub enum SettingsError {
+    #[error("failed to read setting {key}: {details}")]
+    ReadFailed { key: String, details: String },
+
+    #[error("failed to write setting {key}: {details}")]
+    WriteFailed { key: String, details: String },
+
+    #[error("setting not found: {key}")]
+    NotFound { key: String },
+
+    #[error("settings error: {0}")]
+    Other(String),
 }

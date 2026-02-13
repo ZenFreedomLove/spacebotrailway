@@ -314,7 +314,7 @@ impl Channel {
             self.response_tx.clone(),
             conversation_id,
             skip_flag.clone(),
-            self.deps.heartbeat_tool.clone(),
+            self.deps.cron_tool.clone(),
         ).await {
             tracing::error!(%error, "failed to add channel tools");
             return Err(AgentError::Other(error.into()).into());
@@ -541,9 +541,13 @@ pub async fn spawn_branch_from_state(
     description: impl Into<String>,
 ) -> std::result::Result<BranchId, AgentError> {
     let description = description.into();
-    let prompt_engine = state.deps.runtime_config.prompts.load();
+    let rc = &state.deps.runtime_config;
+    let prompt_engine = rc.prompts.load();
     let system_prompt = prompt_engine
-        .render_static("branch")
+        .render_branch_prompt(
+            &rc.instance_dir.display().to_string(),
+            &rc.workspace_dir.display().to_string(),
+        )
         .expect("failed to render branch prompt");
 
     spawn_branch(state, &description, &description, &system_prompt, "thinking...")
@@ -651,7 +655,10 @@ pub async fn spawn_worker_from_state(
     let rc = &state.deps.runtime_config;
     let prompt_engine = rc.prompts.load();
     let worker_system_prompt = prompt_engine
-        .render_static("worker")
+        .render_worker_prompt(
+            &rc.instance_dir.display().to_string(),
+            &rc.workspace_dir.display().to_string(),
+        )
         .expect("failed to render worker prompt");
     let skills = rc.skills.load();
     let browser_config = (**rc.browser_config.load()).clone();

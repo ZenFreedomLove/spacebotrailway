@@ -165,6 +165,28 @@ impl PromptEngine {
         )
     }
 
+    /// Render the worker system prompt with filesystem context.
+    pub fn render_worker_prompt(&self, instance_dir: &str, workspace_dir: &str) -> Result<String> {
+        self.render(
+            "worker",
+            context! {
+                instance_dir => instance_dir,
+                workspace_dir => workspace_dir,
+            },
+        )
+    }
+
+    /// Render the branch system prompt with filesystem context.
+    pub fn render_branch_prompt(&self, instance_dir: &str, workspace_dir: &str) -> Result<String> {
+        self.render(
+            "branch",
+            context! {
+                instance_dir => instance_dir,
+                workspace_dir => workspace_dir,
+            },
+        )
+    }
+
     /// Convenience method for rendering skills worker fragment.
     pub fn render_skills_worker(&self, skill_name: &str, skill_content: &str) -> Result<String> {
         self.render(

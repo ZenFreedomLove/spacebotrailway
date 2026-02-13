@@ -1,35 +1,35 @@
-//! Heartbeat management tool for creating, listing, and deleting scheduled tasks.
+//! Cron job management tool for creating, listing, and deleting scheduled tasks.
 
-use crate::heartbeat::scheduler::{HeartbeatConfig, Scheduler};
-use crate::heartbeat::store::HeartbeatStore;
+use crate::cron::scheduler::{CronConfig, Scheduler};
+use crate::cron::store::CronStore;
 use rig::completion::ToolDefinition;
 use rig::tool::Tool;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
-/// Tool for managing heartbeats (scheduled recurring tasks).
+/// Tool for managing cron jobs (scheduled recurring tasks).
 #[derive(Debug, Clone)]
-pub struct HeartbeatTool {
-    store: Arc<HeartbeatStore>,
+pub struct CronTool {
+    store: Arc<CronStore>,
     scheduler: Arc<Scheduler>,
 }
 
-impl HeartbeatTool {
-    pub fn new(store: Arc<HeartbeatStore>, scheduler: Arc<Scheduler>) -> Self {
+impl CronTool {
+    pub fn new(store: Arc<CronStore>, scheduler: Arc<Scheduler>) -> Self {
         Self { store, scheduler }
     }
 }
 
 #[derive(Debug, thiserror::Error)]
-#[error("Heartbeat operation failed: {0}")]
-pub struct HeartbeatError(String);
+#[error("Cron operation failed: {0}")]
+pub struct CronError(String);
 
 #[derive(Debug, Deserialize, JsonSchema)]
-pub struct HeartbeatArgs {
+pub struct CronArgs {
     /// The operation to perform: "create", "list", or "delete".
     pub action: String,
-    /// Required for "create": a short unique ID for the heartbeat (e.g. "check-email", "daily-summary").
+    /// Required for "create": a short unique ID for the cron job (e.g. "check-email", "daily-summary").
     #[serde(default)]
     pub id: Option<String>,
     /// Required for "create": the prompt/instruction to execute on each run.
@@ -41,28 +41,28 @@ pub struct HeartbeatArgs {
     /// Required for "create": where to deliver results, in "adapter:target" format (e.g. "discord:123456789").
     #[serde(default)]
     pub delivery_target: Option<String>,
-    /// Optional for "create": hour (0-23) when the heartbeat becomes active.
+    /// Optional for "create": hour (0-23) when the job becomes active.
     #[serde(default)]
     pub active_start_hour: Option<u8>,
-    /// Optional for "create": hour (0-23) when the heartbeat becomes inactive.
+    /// Optional for "create": hour (0-23) when the job becomes inactive.
     #[serde(default)]
     pub active_end_hour: Option<u8>,
-    /// Required for "delete": the ID of the heartbeat to remove.
+    /// Required for "delete": the ID of the cron job to remove.
     #[serde(default)]
     pub delete_id: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
-pub struct HeartbeatOutput {
+pub struct CronOutput {
     pub success: bool,
     pub message: String,
     /// Populated on "list" action.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub heartbeats: Option<Vec<HeartbeatEntry>>,
+    pub jobs: Option<Vec<CronEntry>>,
 }
 
 #[derive(Debug, Serialize)]
-pub struct HeartbeatEntry {
+pub struct CronEntry {
     pub id: String,
     pub prompt: String,
     pub interval_secs: u64,
@@ -70,24 +70,24 @@ pub struct HeartbeatEntry {
     pub active_hours: Option<String>,
 }
 
-impl Tool for HeartbeatTool {
-    const NAME: &'static str = "heartbeat";
+impl Tool for CronTool {
+    const NAME: &'static str = "cron";
 
-    type Error = HeartbeatError;
-    type Args = HeartbeatArgs;
-    type Output = HeartbeatOutput;
+    type Error = CronError;
+    type Args = CronArgs;
+    type Output = CronOutput;
 
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: Self::NAME.to_string(),
-            description: "Manage scheduled recurring tasks (heartbeats). Use this to create, list, or delete heartbeats. A heartbeat runs a prompt on a timer and delivers the result to a messaging channel.".to_string(),
+            description: "Manage scheduled recurring tasks (cron jobs). Use this to create, list, or delete cron jobs. A cron job runs a prompt on a timer and delivers the result to a messaging channel.".to_string(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
                     "action": {
                         "type": "string",
                         "enum": ["create", "list", "delete"],
-                        "description": "The operation: create a new heartbeat, list all heartbeats, or delete one."
+                        "description": "The operation: create a new cron job, list all cron jobs, or delete one."
                     },
                     "id": {
                         "type": "string",
@@ -115,7 +115,7 @@ impl Tool for HeartbeatTool {
                     },
                     "delete_id": {
                         "type": "string",
-                        "description": "For 'delete': the ID of the heartbeat to remove."
+                        "description": "For 'delete': the ID of the cron job to remove."
                     }
                 },
                 "required": ["action"]
@@ -128,34 +128,34 @@ impl Tool for HeartbeatTool {
             "create" => self.create(args).await,
             "list" => self.list().await,
             "delete" => self.delete(args).await,
-            other => Ok(HeartbeatOutput {
+            other => Ok(CronOutput {
                 success: false,
                 message: format!("Unknown action '{other}'. Use 'create', 'list', or 'delete'."),
-                heartbeats: None,
+                jobs: None,
             }),
         }
     }
 }
 
-impl HeartbeatTool {
-    async fn create(&self, args: HeartbeatArgs) -> Result<HeartbeatOutput, HeartbeatError> {
-        let id = args.id.ok_or_else(|| HeartbeatError("'id' is required for create".into()))?;
+impl CronTool {
+    async fn create(&self, args: CronArgs) -> Result<CronOutput, CronError> {
+        let id = args.id.ok_or_else(|| CronError("'id' is required for create".into()))?;
         let prompt = args
             .prompt
-            .ok_or_else(|| HeartbeatError("'prompt' is required for create".into()))?;
+            .ok_or_else(|| CronError("'prompt' is required for create".into()))?;
         let interval_secs = args
             .interval_secs
-            .ok_or_else(|| HeartbeatError("'interval_secs' is required for create".into()))?;
+            .ok_or_else(|| CronError("'interval_secs' is required for create".into()))?;
         let delivery_target = args
             .delivery_target
-            .ok_or_else(|| HeartbeatError("'delivery_target' is required for create".into()))?;
+            .ok_or_else(|| CronError("'delivery_target' is required for create".into()))?;
 
         let active_hours = match (args.active_start_hour, args.active_end_hour) {
             (Some(start), Some(end)) => Some((start, end)),
             _ => None,
         };
 
-        let config = HeartbeatConfig {
+        let config = CronConfig {
             id: id.clone(),
             prompt: prompt.clone(),
             interval_secs,
@@ -168,39 +168,39 @@ impl HeartbeatTool {
         self.store
             .save(&config)
             .await
-            .map_err(|error| HeartbeatError(format!("failed to save: {error}")))?;
+            .map_err(|error| CronError(format!("failed to save: {error}")))?;
 
         // Register with the running scheduler so it starts immediately
         self.scheduler
             .register(config)
             .await
-            .map_err(|error| HeartbeatError(format!("failed to register: {error}")))?;
+            .map_err(|error| CronError(format!("failed to register: {error}")))?;
 
         let interval_desc = format_interval(interval_secs);
-        let mut message = format!("Heartbeat '{id}' created. Runs {interval_desc}.");
+        let mut message = format!("Cron job '{id}' created. Runs {interval_desc}.");
         if let Some((start, end)) = active_hours {
             message.push_str(&format!(" Active {start:02}:00-{end:02}:00."));
         }
 
-        tracing::info!(heartbeat_id = %id, %interval_secs, %delivery_target, "heartbeat created via tool");
+        tracing::info!(cron_id = %id, %interval_secs, %delivery_target, "cron job created via tool");
 
-        Ok(HeartbeatOutput {
+        Ok(CronOutput {
             success: true,
             message,
-            heartbeats: None,
+            jobs: None,
         })
     }
 
-    async fn list(&self) -> Result<HeartbeatOutput, HeartbeatError> {
+    async fn list(&self) -> Result<CronOutput, CronError> {
         let configs = self
             .store
             .load_all()
             .await
-            .map_err(|error| HeartbeatError(format!("failed to list: {error}")))?;
+            .map_err(|error| CronError(format!("failed to list: {error}")))?;
 
-        let entries: Vec<HeartbeatEntry> = configs
+        let entries: Vec<CronEntry> = configs
             .into_iter()
-            .map(|config| HeartbeatEntry {
+            .map(|config| CronEntry {
                 id: config.id,
                 prompt: config.prompt,
                 interval_secs: config.interval_secs,
@@ -210,30 +210,30 @@ impl HeartbeatTool {
             .collect();
 
         let count = entries.len();
-        Ok(HeartbeatOutput {
+        Ok(CronOutput {
             success: true,
-            message: format!("{count} active heartbeat(s)."),
-            heartbeats: Some(entries),
+            message: format!("{count} active cron job(s)."),
+            jobs: Some(entries),
         })
     }
 
-    async fn delete(&self, args: HeartbeatArgs) -> Result<HeartbeatOutput, HeartbeatError> {
+    async fn delete(&self, args: CronArgs) -> Result<CronOutput, CronError> {
         let id = args
             .delete_id
             .or(args.id)
-            .ok_or_else(|| HeartbeatError("'delete_id' or 'id' is required for delete".into()))?;
+            .ok_or_else(|| CronError("'delete_id' or 'id' is required for delete".into()))?;
 
         self.store
             .delete(&id)
             .await
-            .map_err(|error| HeartbeatError(format!("failed to delete: {error}")))?;
+            .map_err(|error| CronError(format!("failed to delete: {error}")))?;
 
-        tracing::info!(heartbeat_id = %id, "heartbeat deleted via tool");
+        tracing::info!(cron_id = %id, "cron job deleted via tool");
 
-        Ok(HeartbeatOutput {
+        Ok(CronOutput {
             success: true,
-            message: format!("Heartbeat '{id}' deleted."),
-            heartbeats: None,
+            message: format!("Cron job '{id}' deleted."),
+            jobs: None,
         })
     }
 }

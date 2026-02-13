@@ -40,7 +40,7 @@ With `--foreground`, steps 4-5 are skipped. Logs go to stdout, the process stays
 
 ### Stopping
 
-`spacebot stop` connects to the Unix socket, sends a shutdown command, and waits for the process to exit (up to 10 seconds). The daemon performs graceful shutdown: draining active channels, stopping heartbeat schedulers, closing database connections, and cleaning up runtime files.
+`spacebot stop` connects to the Unix socket, sends a shutdown command, and waits for the process to exit (up to 10 seconds). The daemon performs graceful shutdown: draining active channels, stopping cron schedulers, closing database connections, and cleaning up runtime files.
 
 ### Restarting
 

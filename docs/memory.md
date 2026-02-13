@@ -165,11 +165,11 @@ What's gone:
 
 - **MEMORY.md** -- replaced by dynamic memory selection from the graph
 - **daily/YYYY-MM-DD.md** -- replaced by typed memories with timestamps
-- **HEARTBEAT.md** -- replaced by database-stored heartbeat definitions
+- **HEARTBEAT.md** -- replaced by database-stored cron job definitions
 
 ## Context Injection
 
-When a channel starts or a heartbeat fires, memories are injected into the system prompt. This isn't a raw dump -- it's a curated selection:
+When a channel starts or a cron job fires, memories are injected into the system prompt. This isn't a raw dump -- it's a curated selection:
 
 1. Identity-tagged memories are always included
 2. High-importance memories above a threshold are included
@@ -199,4 +199,4 @@ A periodic background process handles graph hygiene:
 - **Merge** -- combine near-duplicate memories (>0.95 similarity)
 - **Reindex** -- recompute graph centrality scores
 
-This is a heartbeat-style job managed by the cortex. It runs in workers, doesn't block anything, and keeps the graph healthy over time.
+This is a scheduled job managed by the cortex. It runs in workers, doesn't block anything, and keeps the graph healthy over time.

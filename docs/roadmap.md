@@ -29,9 +29,9 @@ Tracking progress from first compile to public launch.
 - **Hooks** — `SpacebotHook` with tool call/result events, leak detection; `CortexHook` for observation
 - **Messaging** — `Messaging` trait with RPITIT + companion, `MessagingManager` with fan-in/routing
 - **Discord adapter** — full serenity implementation (message handling, streaming via edit, typing indicators)
-- **Tools** — 16 tools implement Rig's `Tool` trait with real logic (reply, branch, spawn_worker, route, cancel, skip, react, memory_save, memory_recall, set_status, shell, file, exec, browser, heartbeat, web_search)
+- **Tools** — 16 tools implement Rig's `Tool` trait with real logic (reply, branch, spawn_worker, route, cancel, skip, react, memory_save, memory_recall, set_status, shell, file, exec, browser, cron, web_search)
 - **Conversation persistence** — **FULLY IMPLEMENTED** — `ConversationLogger` with fire-and-forget SQLite writes, compaction archiving
-- **Heartbeat** — **FULLY IMPLEMENTED** — scheduler with timers, active hours, circuit breaker (3 failures → disable), creates real channels
+- **Cron** — **FULLY IMPLEMENTED** — scheduler with timers, active hours, circuit breaker (3 failures → disable), creates real channels
 - **Message routing** — full event loop with binding resolution, channel lifecycle, outbound routing
 
 ### What's Stubbed or Missing
@@ -56,7 +56,7 @@ Tracking progress from first compile to public launch.
 5. **RouteTool no-op** — returns `routed: true` to the LLM without actually sending the message
 6. **Silent error swallows** — `memory_save.rs:208` drops association errors, `memory_recall.rs:138` drops access recording errors, `discord.rs:446` can silently lose inbound messages
 7. **memory_recall** — `memory_type` filter arg accepted but never applied to search
-8. **heartbeat tool** — not wired into `add_channel_tools()` factory
+8. **cron tool** — not wired into `add_channel_tools()` factory
 
 ---
 
@@ -82,16 +82,16 @@ Chronological development history based on git commits:
 - `43e9cca` — Enhanced Channel structure with conversation context
 - `98fd965` — **Conversation persistence** — `ConversationLogger` with SQLite storage
 
-### 2026-02-12 — Workers, Compaction, Heartbeats & Tools
+### 2026-02-12 — Workers, Compaction, Cron & Tools
 
 - `52ae37d` — **Compaction** — `Compactor` with tiered thresholds, archiving, emergency truncation
 - `11c15a4` — Discord threading support, attachment handling, `ReplyTool` enhancements
 - `2b83c08` — **Browser tool** — chromiumoxide integration, element ref system, screenshots
 - `64f2d1e` — Skills framework foundation
-- `bcd57f2` — **Heartbeat scheduler** — timer management, circuit breaker
-- `a2ab16f` — **Heartbeat tool** — CRUD operations, delivery targets, active hours
+- `bcd57f2` — **Cron scheduler** — timer management, circuit breaker
+- `a2ab16f` — **Cron tool** — CRUD operations, delivery targets, active hours
 - `a9068c1` — Config hot-reloading with `arc-swap`, file watching via `notify`
-- `6ee1d26` — Exit strategy improvements, heartbeat shutdown cleanup
+- `6ee1d26` — Exit strategy improvements, cron shutdown cleanup
 - `65427f4` — **Skip and react tools** — message suppression and emoji reactions
 - `17930dd` — Tool server documentation refinements
 - `f25ce96` — Channel tool registration documentation
@@ -101,8 +101,8 @@ Chronological development history based on git commits:
 
 ## ~~Phase 1: Migrations and LanceDB~~ Done
 
-- [x] SQLite migrations for all tables (memories, associations, conversations, heartbeats)
-- [x] Inline DDL removed from `memory/store.rs`, `conversation/history.rs`, `heartbeat/store.rs`
+- [x] SQLite migrations for all tables (memories, associations, conversations, cron_jobs)
+- [x] Inline DDL removed from `memory/store.rs`, `conversation/history.rs`, `cron/store.rs`
 - [x] `memory/lance.rs` — LanceDB table with Arrow schema, embedding insert, vector search (cosine), FTS (Tantivy), index creation
 - [x] Embedding generation wired into memory save flow
 - [x] Vector + FTS results connected into hybrid search via `MemorySearch` struct
@@ -199,7 +199,7 @@ Fix runtime panics and functional gaps before launch.
 - [ ] Fix RouteTool — store worker `input_tx` in `ChannelState` so `route` actually delivers messages
 - [ ] Fix silent error swallows — add `tracing::warn` on association creation, access recording, and inbound message send failures
 - [ ] Wire `memory_type` filter through to `SearchConfig` in `memory_recall`
-- [ ] Wire `HeartbeatTool` into `add_channel_tools()` factory
+- [ ] Wire `CronTool` into `add_channel_tools()` factory
 - [ ] Add workspace path guards to `file` and `shell` tools
 - [ ] Test: send a message via Discord, get a real LLM response back
 - [ ] Test: trigger a branch (message that requires memory recall), verify branch result incorporation
@@ -288,7 +288,7 @@ One-click hosted Spacebot for people who don't want to self-host.
 - [ ] Container orchestration — per-user isolated containers with persistent volumes for agent data
 - [ ] Onboarding flow — connect Discord/Telegram, set API keys (or use shared keys with usage billing), configure identity
 - [ ] Billing — subscription model, usage-based pricing for LLM calls if using shared keys
-- [ ] Dashboard — web UI for agent management, memory browsing, conversation history, heartbeat config
+- [ ] Dashboard — web UI for agent management, memory browsing, conversation history, cron config
 - [ ] Monitoring — container health, per-user resource usage, error alerting
 
 ---

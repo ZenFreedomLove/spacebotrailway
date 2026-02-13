@@ -80,9 +80,9 @@ Also observes system-wide signals for future health monitoring and memory consol
 
 Every turn, the channel gets a live status block injected into its context — active workers, recently completed work, branch states. Workers set their own status via `set_status` tool. Short branches are invisible (only appear if running >3s).
 
-### Heartbeats
+### Cron Jobs
 
-Database-stored scheduled tasks. Each heartbeat has a prompt, interval, delivery target, and optional active hours. When a timer fires, it gets a fresh short-lived channel with full branching and worker capabilities. Multiple heartbeats run independently and concurrently.
+Database-stored scheduled tasks. Each cron job has a prompt, interval, delivery target, and optional active hours. When a timer fires, it gets a fresh short-lived channel with full branching and worker capabilities. Multiple cron jobs run independently and concurrently.
 
 ## Key Types
 
@@ -100,7 +100,7 @@ ChannelId              — Arc<str> type alias
 AgentDeps              — dependency bundle (memory_store, llm_manager, tool_server, event_tx)
 LlmManager             — holds provider clients, routes by model name
 DecryptedSecret        — secret wrapper, redacts in Debug/Display
-HeartbeatConfig        — prompt + interval + active_hours + notify
+CronConfig             — prompt + interval + active_hours + notify
 ```
 
 ## Module Map
@@ -146,7 +146,7 @@ src/
 │   ├── file.rs         — read/write/list files (task workers)
 │   ├── exec.rs         — run subprocess (task workers)
 │   ├── browser.rs      — web browsing (task workers)
-│   └── heartbeat.rs    — heartbeat management (channel only)
+│   └── cron.rs         — cron management (channel only)
 │
 ├── memory.rs           → memory/
 │   ├── store.rs        — MemoryStore: CRUD + graph ops (SQLite)
@@ -167,9 +167,9 @@ src/
 │   ├── history.rs      — conversation persistence (SQLite)
 │   └── context.rs      — context assembly (prompt + identity + memories + status)
 │
-├── heartbeat.rs        → heartbeat/
+├── cron.rs             → cron/
 │   ├── scheduler.rs    — timer management
-│   └── store.rs        — heartbeat CRUD (SQLite)
+│   └── store.rs        — cron CRUD (SQLite)
 │
 ├── identity.rs         → identity/
 │   └── files.rs        — load SOUL.md, IDENTITY.md, USER.md
@@ -192,7 +192,7 @@ Tools are organized by function, not by consumer. Which processes get which tool
 
 Each doing what it's best at. No server processes.
 
-**SQLite** (via sqlx) — relational data: conversations, memory graph, heartbeats. Queries with joins, ordering, filtering. Migrations in `migrations/`.
+**SQLite** (via sqlx) — relational data: conversations, memory graph, cron jobs. Queries with joins, ordering, filtering. Migrations in `migrations/`.
 
 **LanceDB** — vector/search data: embeddings (HNSW), full-text search (Tantivy), hybrid search (RRF). Joined to SQLite on memory ID.
 
@@ -297,7 +297,7 @@ Phase 4 — System:
 3. `prompts/` — system prompt files for each process type
 4. `agent/cortex.rs` — Cortex
 5. `hooks/cortex.rs` — CortexHook
-6. `heartbeat/` — scheduler + store
+6. `cron/` — scheduler + store
 
 Phase 5 — Messaging:
 1. `messaging/traits.rs` — Messaging trait + MessagingDyn
@@ -311,7 +311,7 @@ Phase 6 — Hardening:
 2. `settings/` — key-value settings
 3. Leak detection (scan tool output via SpacebotHook)
 4. Workspace path guards (reject writes to identity/memory paths)
-5. Circuit breaker for heartbeats and background tasks
+5. Circuit breaker for cron jobs and background tasks
 
 ## Anti-Patterns
 
@@ -351,7 +351,7 @@ These are validated patterns from research (see `docs/research/pattern-analysis.
 
 **Workspace path guard:** File tools reject writes to identity/memory paths with an error directing the LLM to the correct tool.
 
-**Circuit breaker:** Auto-disable recurring tasks after 3 consecutive failures. Apply to heartbeats, maintenance workers, cortex routines.
+**Circuit breaker:** Auto-disable recurring tasks after 3 consecutive failures. Apply to cron jobs, maintenance workers, cortex routines.
 
 **Config resolution:** `env > DB > default` with per-subsystem `resolve()` methods.
 

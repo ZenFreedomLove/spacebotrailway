@@ -1,13 +1,13 @@
-//! Heartbeat scheduler: timer management and execution.
+//! Cron scheduler: timer management and execution.
 //!
-//! Each heartbeat gets its own tokio task that fires on an interval.
-//! When a heartbeat fires, it creates a fresh short-lived channel,
-//! runs the heartbeat prompt through the LLM, and delivers the result
+//! Each cron job gets its own tokio task that fires on an interval.
+//! When a job fires, it creates a fresh short-lived channel,
+//! runs the job's prompt through the LLM, and delivers the result
 //! to the delivery target via the messaging system.
 
 use crate::agent::channel::Channel;
+use crate::cron::store::CronStore;
 use crate::error::Result;
-use crate::heartbeat::store::HeartbeatStore;
 use crate::messaging::MessagingManager;
 use crate::{AgentDeps, InboundMessage, MessageContent, OutboundResponse};
 use chrono::Timelike;
@@ -16,9 +16,9 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use tokio::time::{interval, Duration};
 
-/// A heartbeat definition loaded from the database.
+/// A cron job definition loaded from the database.
 #[derive(Debug, Clone)]
-pub struct Heartbeat {
+pub struct CronJob {
     pub id: String,
     pub prompt: String,
     pub interval_secs: u64,
@@ -28,7 +28,7 @@ pub struct Heartbeat {
     pub consecutive_failures: u32,
 }
 
-/// Where to send heartbeat results.
+/// Where to send cron job results.
 #[derive(Debug, Clone)]
 pub struct DeliveryTarget {
     /// Messaging adapter name (e.g. "discord").
@@ -57,9 +57,9 @@ impl std::fmt::Display for DeliveryTarget {
     }
 }
 
-/// Serializable heartbeat config (for storage and TOML parsing).
+/// Serializable cron job config (for storage and TOML parsing).
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct HeartbeatConfig {
+pub struct CronConfig {
     pub id: String,
     pub prompt: String,
     #[serde(default = "default_interval")]
@@ -79,27 +79,27 @@ fn default_true() -> bool {
     true
 }
 
-/// Context needed to execute a heartbeat (agent resources + messaging).
+/// Context needed to execute a cron job (agent resources + messaging).
 ///
 /// Prompts, identity, browser config, and skills are read from
-/// `deps.runtime_config` on each heartbeat firing so changes propagate
+/// `deps.runtime_config` on each job firing so changes propagate
 /// without restarting the scheduler.
 #[derive(Clone)]
-pub struct HeartbeatContext {
+pub struct CronContext {
     pub deps: AgentDeps,
     pub screenshot_dir: std::path::PathBuf,
     pub logs_dir: std::path::PathBuf,
     pub messaging_manager: Arc<MessagingManager>,
-    pub store: Arc<HeartbeatStore>,
+    pub store: Arc<CronStore>,
 }
 
 const MAX_CONSECUTIVE_FAILURES: u32 = 3;
 
-/// Scheduler that manages heartbeat timers and execution.
+/// Scheduler that manages cron job timers and execution.
 pub struct Scheduler {
-    heartbeats: Arc<RwLock<HashMap<String, Heartbeat>>>,
+    jobs: Arc<RwLock<HashMap<String, CronJob>>>,
     timers: Arc<RwLock<HashMap<String, tokio::task::JoinHandle<()>>>>,
-    context: HeartbeatContext,
+    context: CronContext,
 }
 
 impl std::fmt::Debug for Scheduler {
@@ -109,19 +109,19 @@ impl std::fmt::Debug for Scheduler {
 }
 
 impl Scheduler {
-    pub fn new(context: HeartbeatContext) -> Self {
+    pub fn new(context: CronContext) -> Self {
         Self {
-            heartbeats: Arc::new(RwLock::new(HashMap::new())),
+            jobs: Arc::new(RwLock::new(HashMap::new())),
             timers: Arc::new(RwLock::new(HashMap::new())),
             context,
         }
     }
 
-    /// Register and start a heartbeat from config.
-    pub async fn register(&self, config: HeartbeatConfig) -> Result<()> {
+    /// Register and start a cron job from config.
+    pub async fn register(&self, config: CronConfig) -> Result<()> {
         let delivery_target = DeliveryTarget::parse(&config.delivery_target).unwrap_or_else(|| {
             tracing::warn!(
-                heartbeat_id = %config.id,
+                cron_id = %config.id,
                 raw_target = %config.delivery_target,
                 "invalid delivery target format, expected 'adapter:target'"
             );
@@ -131,7 +131,7 @@ impl Scheduler {
             }
         });
 
-        let heartbeat = Heartbeat {
+        let job = CronJob {
             id: config.id.clone(),
             prompt: config.prompt,
             interval_secs: config.interval_secs,
@@ -142,58 +142,58 @@ impl Scheduler {
         };
 
         {
-            let mut heartbeats = self.heartbeats.write().await;
-            heartbeats.insert(config.id.clone(), heartbeat);
+            let mut jobs = self.jobs.write().await;
+            jobs.insert(config.id.clone(), job);
         }
 
         if config.enabled {
             self.start_timer(&config.id).await;
         }
 
-        tracing::info!(heartbeat_id = %config.id, interval_secs = config.interval_secs, "heartbeat registered");
+        tracing::info!(cron_id = %config.id, interval_secs = config.interval_secs, "cron job registered");
         Ok(())
     }
 
-    /// Start a timer loop for a heartbeat.
-    async fn start_timer(&self, heartbeat_id: &str) {
-        let heartbeat_id_for_map = heartbeat_id.to_string();
-        let heartbeat_id = heartbeat_id.to_string();
-        let heartbeats = self.heartbeats.clone();
+    /// Start a timer loop for a cron job.
+    async fn start_timer(&self, job_id: &str) {
+        let job_id_for_map = job_id.to_string();
+        let job_id = job_id.to_string();
+        let jobs = self.jobs.clone();
         let context = self.context.clone();
 
         let handle = tokio::spawn(async move {
             // Look up interval before entering the loop
             let interval_secs = {
-                let hb = heartbeats.read().await;
-                hb.get(&heartbeat_id)
-                    .map(|h| h.interval_secs)
+                let j = jobs.read().await;
+                j.get(&job_id)
+                    .map(|j| j.interval_secs)
                     .unwrap_or(3600)
             };
 
             let mut ticker = interval(Duration::from_secs(interval_secs));
-            // Skip the immediate first tick — heartbeats should wait for the first interval
+            // Skip the immediate first tick — jobs should wait for the first interval
             ticker.tick().await;
 
             loop {
                 ticker.tick().await;
 
-                let heartbeat = {
-                    let hb = heartbeats.read().await;
-                    match hb.get(&heartbeat_id) {
-                        Some(h) if !h.enabled => {
-                            tracing::debug!(heartbeat_id = %heartbeat_id, "heartbeat disabled, stopping timer");
+                let job = {
+                    let j = jobs.read().await;
+                    match j.get(&job_id) {
+                        Some(j) if !j.enabled => {
+                            tracing::debug!(cron_id = %job_id, "cron job disabled, stopping timer");
                             break;
                         }
-                        Some(h) => h.clone(),
+                        Some(j) => j.clone(),
                         None => {
-                            tracing::debug!(heartbeat_id = %heartbeat_id, "heartbeat removed, stopping timer");
+                            tracing::debug!(cron_id = %job_id, "cron job removed, stopping timer");
                             break;
                         }
                     }
                 };
 
                 // Check active hours window
-                if let Some((start, end)) = heartbeat.active_hours {
+                if let Some((start, end)) = job.active_hours {
                     let current_hour = chrono::Local::now().hour() as u8;
                     let in_window = if start <= end {
                         current_hour >= start && current_hour < end
@@ -203,7 +203,7 @@ impl Scheduler {
                     };
                     if !in_window {
                         tracing::debug!(
-                            heartbeat_id = %heartbeat_id,
+                            cron_id = %job_id,
                             current_hour,
                             start,
                             end,
@@ -213,28 +213,28 @@ impl Scheduler {
                     }
                 }
 
-                tracing::info!(heartbeat_id = %heartbeat_id, "heartbeat firing");
+                tracing::info!(cron_id = %job_id, "cron job firing");
 
-                match run_heartbeat(&heartbeat, &context).await {
+                match run_cron_job(&job, &context).await {
                     Ok(()) => {
                         // Reset failure count on success
-                        let mut hb = heartbeats.write().await;
-                        if let Some(h) = hb.get_mut(&heartbeat_id) {
-                            h.consecutive_failures = 0;
+                        let mut j = jobs.write().await;
+                        if let Some(j) = j.get_mut(&job_id) {
+                            j.consecutive_failures = 0;
                         }
                     }
                     Err(error) => {
                         tracing::error!(
-                            heartbeat_id = %heartbeat_id,
+                            cron_id = %job_id,
                             %error,
-                            "heartbeat execution failed"
+                            "cron job execution failed"
                         );
 
                         let should_disable = {
-                            let mut hb = heartbeats.write().await;
-                            if let Some(h) = hb.get_mut(&heartbeat_id) {
-                                h.consecutive_failures += 1;
-                                h.consecutive_failures >= MAX_CONSECUTIVE_FAILURES
+                            let mut j = jobs.write().await;
+                            if let Some(j) = j.get_mut(&job_id) {
+                                j.consecutive_failures += 1;
+                                j.consecutive_failures >= MAX_CONSECUTIVE_FAILURES
                             } else {
                                 false
                             }
@@ -242,20 +242,20 @@ impl Scheduler {
 
                         if should_disable {
                             tracing::warn!(
-                                heartbeat_id = %heartbeat_id,
+                                cron_id = %job_id,
                                 "circuit breaker tripped after {MAX_CONSECUTIVE_FAILURES} consecutive failures, disabling"
                             );
 
                             {
-                                let mut hb = heartbeats.write().await;
-                                if let Some(h) = hb.get_mut(&heartbeat_id) {
-                                    h.enabled = false;
+                                let mut j = jobs.write().await;
+                                if let Some(j) = j.get_mut(&job_id) {
+                                    j.enabled = false;
                                 }
                             }
 
                             // Persist the disabled state
-                            if let Err(error) = context.store.update_enabled(&heartbeat_id, false).await {
-                                tracing::error!(%error, "failed to persist heartbeat disabled state");
+                            if let Err(error) = context.store.update_enabled(&job_id, false).await {
+                                tracing::error!(%error, "failed to persist cron job disabled state");
                             }
 
                             break;
@@ -266,10 +266,10 @@ impl Scheduler {
         });
 
         let mut timers = self.timers.write().await;
-        timers.insert(heartbeat_id_for_map, handle);
+        timers.insert(job_id_for_map, handle);
     }
 
-    /// Shutdown all heartbeat timers and wait for them to finish.
+    /// Shutdown all cron job timers and wait for them to finish.
     pub async fn shutdown(&self) {
         let handles: Vec<(String, tokio::task::JoinHandle<()>)> = {
             let mut timers = self.timers.write().await;
@@ -279,14 +279,14 @@ impl Scheduler {
         for (id, handle) in handles {
             handle.abort();
             let _ = handle.await;
-            tracing::debug!(heartbeat_id = %id, "heartbeat timer stopped");
+            tracing::debug!(cron_id = %id, "cron timer stopped");
         }
     }
 }
 
-/// Execute a single heartbeat: create a fresh channel, run the prompt, deliver the result.
-async fn run_heartbeat(heartbeat: &Heartbeat, context: &HeartbeatContext) -> Result<()> {
-    let channel_id: crate::ChannelId = Arc::from(format!("heartbeat:{}", heartbeat.id).as_str());
+/// Execute a single cron job: create a fresh channel, run the prompt, deliver the result.
+async fn run_cron_job(job: &CronJob, context: &CronContext) -> Result<()> {
+    let channel_id: crate::ChannelId = Arc::from(format!("cron:{}", job.id).as_str());
 
     // Create the outbound response channel to collect whatever the channel produces
     let (response_tx, mut response_rx) = tokio::sync::mpsc::channel::<OutboundResponse>(32);
@@ -306,18 +306,18 @@ async fn run_heartbeat(heartbeat: &Heartbeat, context: &HeartbeatContext) -> Res
     // Spawn the channel's event loop
     let channel_handle = tokio::spawn(async move {
         if let Err(error) = channel.run().await {
-            tracing::error!(%error, "heartbeat channel failed");
+            tracing::error!(%error, "cron channel failed");
         }
     });
 
-    // Send the heartbeat prompt as a synthetic message
+    // Send the cron job prompt as a synthetic message
     let message = InboundMessage {
         id: uuid::Uuid::new_v4().to_string(),
-        source: "heartbeat".into(),
-        conversation_id: format!("heartbeat:{}", heartbeat.id),
+        source: "cron".into(),
+        conversation_id: format!("cron:{}", job.id),
         sender_id: "system".into(),
         agent_id: Some(context.deps.agent_id.clone()),
-        content: MessageContent::Text(heartbeat.prompt.clone()),
+        content: MessageContent::Text(job.prompt.clone()),
         timestamp: chrono::Utc::now(),
         metadata: HashMap::new(),
     };
@@ -325,7 +325,7 @@ async fn run_heartbeat(heartbeat: &Heartbeat, context: &HeartbeatContext) -> Res
     channel_tx
         .send(message)
         .await
-        .map_err(|error| anyhow::anyhow!("failed to send heartbeat prompt to channel: {error}"))?;
+        .map_err(|error| anyhow::anyhow!("failed to send cron prompt to channel: {error}"))?;
 
     // Collect responses with a timeout. The channel may produce multiple messages
     // (e.g. status updates, then text). We only care about text responses.
@@ -343,14 +343,14 @@ async fn run_heartbeat(heartbeat: &Heartbeat, context: &HeartbeatContext) -> Res
                 collected_text.push(text);
             }
             Ok(Some(_)) => {
-                // Status updates, stream chunks, etc. — ignore for heartbeats
+                // Status updates, stream chunks, etc. — ignore for cron jobs
             }
             Ok(None) => {
                 // Channel finished (response_tx dropped)
                 break;
             }
             Err(_) => {
-                tracing::warn!(heartbeat_id = %heartbeat.id, "heartbeat timed out after {timeout:?}");
+                tracing::warn!(cron_id = %job.id, "cron job timed out after {timeout:?}");
                 channel_handle.abort();
                 break;
             }
@@ -371,10 +371,10 @@ async fn run_heartbeat(heartbeat: &Heartbeat, context: &HeartbeatContext) -> Res
     };
     if let Err(error) = context
         .store
-        .log_execution(&heartbeat.id, true, summary)
+        .log_execution(&job.id, true, summary)
         .await
     {
-        tracing::warn!(%error, "failed to log heartbeat execution");
+        tracing::warn!(%error, "failed to log cron execution");
     }
 
     // Deliver result to target (only if there's something to say)
@@ -382,33 +382,33 @@ async fn run_heartbeat(heartbeat: &Heartbeat, context: &HeartbeatContext) -> Res
         if let Err(error) = context
             .messaging_manager
             .broadcast(
-                &heartbeat.delivery_target.adapter,
-                &heartbeat.delivery_target.target,
+                &job.delivery_target.adapter,
+                &job.delivery_target.target,
                 OutboundResponse::Text(result_text),
             )
             .await
         {
             tracing::error!(
-                heartbeat_id = %heartbeat.id,
-                target = %heartbeat.delivery_target,
+                cron_id = %job.id,
+                target = %job.delivery_target,
                 %error,
-                "failed to deliver heartbeat result"
+                "failed to deliver cron result"
             );
             // Log the delivery failure
             let _ = context
                 .store
-                .log_execution(&heartbeat.id, false, Some(&error.to_string()))
+                .log_execution(&job.id, false, Some(&error.to_string()))
                 .await;
             return Err(error);
         }
 
         tracing::info!(
-            heartbeat_id = %heartbeat.id,
-            target = %heartbeat.delivery_target,
-            "heartbeat result delivered"
+            cron_id = %job.id,
+            target = %job.delivery_target,
+            "cron result delivered"
         );
     } else {
-        tracing::debug!(heartbeat_id = %heartbeat.id, "heartbeat produced no output, skipping delivery");
+        tracing::debug!(cron_id = %job.id, "cron job produced no output, skipping delivery");
     }
 
     Ok(())
