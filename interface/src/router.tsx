@@ -11,6 +11,7 @@ import { Overview } from "@/routes/Overview";
 import { AgentDetail } from "@/routes/AgentDetail";
 import { AgentChannels } from "@/routes/AgentChannels";
 import { ChannelDetail } from "@/routes/ChannelDetail";
+import { AgentMemories } from "@/routes/AgentMemories";
 import { useLiveContext } from "@/hooks/useLiveContext";
 import { AgentTabs } from "@/components/AgentTabs";
 
@@ -118,8 +119,8 @@ const agentMemoriesRoute = createRoute({
 		return (
 			<div className="flex h-full flex-col">
 				<AgentHeader agentId={agentId} />
-				<div className="flex flex-1 items-center justify-center">
-					<p className="text-sm text-ink-faint">Memories coming soon</p>
+				<div className="flex-1 overflow-hidden">
+					<AgentMemories agentId={agentId} />
 				</div>
 			</div>
 		);

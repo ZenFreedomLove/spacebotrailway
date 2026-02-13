@@ -206,7 +206,7 @@ impl std::fmt::Display for RelationType {
 }
 
 /// Search result combining memory with relevance score.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct MemorySearchResult {
     pub memory: Memory,
     pub score: f32,

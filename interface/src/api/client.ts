@@ -201,6 +201,64 @@ export interface AgentsResponse {
 	agents: AgentInfo[];
 }
 
+export type MemoryType =
+	| "fact"
+	| "preference"
+	| "decision"
+	| "identity"
+	| "event"
+	| "observation"
+	| "goal"
+	| "todo";
+
+export const MEMORY_TYPES: MemoryType[] = [
+	"fact", "preference", "decision", "identity",
+	"event", "observation", "goal", "todo",
+];
+
+export type MemorySort = "recent" | "importance" | "most_accessed";
+
+export interface MemoryItem {
+	id: string;
+	content: string;
+	memory_type: MemoryType;
+	importance: number;
+	created_at: string;
+	updated_at: string;
+	last_accessed_at: string;
+	access_count: number;
+	source: string | null;
+	channel_id: string | null;
+	forgotten: boolean;
+}
+
+export interface MemoriesListResponse {
+	memories: MemoryItem[];
+	total: number;
+}
+
+export interface MemorySearchResultItem {
+	memory: MemoryItem;
+	score: number;
+	rank: number;
+}
+
+export interface MemoriesSearchResponse {
+	results: MemorySearchResultItem[];
+}
+
+export interface MemoriesListParams {
+	limit?: number;
+	offset?: number;
+	memory_type?: MemoryType;
+	sort?: MemorySort;
+}
+
+export interface MemoriesSearchParams {
+	limit?: number;
+	memory_type?: MemoryType;
+}
+
 export const api = {
 	status: () => fetchJson<StatusResponse>("/status"),
 	agents: () => fetchJson<AgentsResponse>("/agents"),
@@ -210,5 +268,19 @@ export const api = {
 			`/channels/messages?channel_id=${encodeURIComponent(channelId)}&limit=${limit}`,
 		),
 	channelStatus: () => fetchJson<ChannelStatusResponse>("/channels/status"),
+	agentMemories: (agentId: string, params: MemoriesListParams = {}) => {
+		const search = new URLSearchParams({ agent_id: agentId });
+		if (params.limit) search.set("limit", String(params.limit));
+		if (params.offset) search.set("offset", String(params.offset));
+		if (params.memory_type) search.set("memory_type", params.memory_type);
+		if (params.sort) search.set("sort", params.sort);
+		return fetchJson<MemoriesListResponse>(`/agents/memories?${search}`);
+	},
+	searchMemories: (agentId: string, query: string, params: MemoriesSearchParams = {}) => {
+		const search = new URLSearchParams({ agent_id: agentId, q: query });
+		if (params.limit) search.set("limit", String(params.limit));
+		if (params.memory_type) search.set("memory_type", params.memory_type);
+		return fetchJson<MemoriesSearchResponse>(`/agents/memories/search?${search}`);
+	},
 	eventsUrl: `${API_BASE}/events`,
 };

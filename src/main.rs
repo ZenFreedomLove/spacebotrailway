@@ -394,10 +394,12 @@ async fn run(config: spacebot::config::Config, foreground: bool) -> anyhow::Resu
     {
         let mut agent_pools = std::collections::HashMap::new();
         let mut agent_configs = Vec::new();
+        let mut memory_searches = std::collections::HashMap::new();
         for (agent_id, agent) in &agents {
             let event_rx = agent.deps.event_tx.subscribe();
             api_state.register_agent_events(agent_id.to_string(), event_rx);
             agent_pools.insert(agent_id.to_string(), agent.db.sqlite.clone());
+            memory_searches.insert(agent_id.to_string(), agent.deps.memory_search.clone());
             agent_configs.push(spacebot::api::AgentInfo {
                 id: agent.config.id.clone(),
                 workspace: agent.config.workspace.clone(),
@@ -408,6 +410,7 @@ async fn run(config: spacebot::config::Config, foreground: bool) -> anyhow::Resu
         }
         api_state.set_agent_pools(agent_pools);
         api_state.set_agent_configs(agent_configs);
+        api_state.set_memory_searches(memory_searches);
     }
 
     // Initialize messaging adapters

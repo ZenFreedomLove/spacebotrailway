@@ -3,6 +3,8 @@
 use super::state::{AgentInfo, ApiEvent, ApiState};
 use crate::conversation::channels::ChannelStore;
 use crate::conversation::history::{ProcessRunLogger, TimelineItem};
+use crate::memory::types::{Memory, MemorySearchResult, MemoryType};
+use crate::memory::search::{SearchConfig, SearchMode, SearchSort};
 
 use axum::extract::{Query, State};
 use axum::http::{header, StatusCode, Uri};
@@ -65,6 +67,17 @@ struct AgentsResponse {
     agents: Vec<AgentInfo>,
 }
 
+#[derive(Serialize)]
+struct MemoriesListResponse {
+    memories: Vec<Memory>,
+    total: usize,
+}
+
+#[derive(Serialize)]
+struct MemoriesSearchResponse {
+    results: Vec<MemorySearchResult>,
+}
+
 /// Start the HTTP server on the given address.
 ///
 /// The caller provides a pre-built `ApiState` so agent event streams and
@@ -86,7 +99,9 @@ pub async fn start_http_server(
         .route("/agents", get(list_agents))
         .route("/channels", get(list_channels))
         .route("/channels/messages", get(channel_messages))
-        .route("/channels/status", get(channel_status));
+        .route("/channels/status", get(channel_status))
+        .route("/agents/memories", get(list_memories))
+        .route("/agents/memories/search", get(search_memories));
 
     let app = Router::new()
         .nest("/api", api_routes)
@@ -268,6 +283,116 @@ async fn channel_status(
     }
 
     Json(result)
+}
+
+#[derive(Deserialize)]
+struct MemoriesListQuery {
+    agent_id: String,
+    #[serde(default = "default_memories_limit")]
+    limit: i64,
+    #[serde(default)]
+    offset: usize,
+    #[serde(default)]
+    memory_type: Option<String>,
+    #[serde(default = "default_memories_sort")]
+    sort: String,
+}
+
+fn default_memories_limit() -> i64 {
+    50
+}
+
+fn default_memories_sort() -> String {
+    "recent".into()
+}
+
+fn parse_sort(sort: &str) -> SearchSort {
+    match sort {
+        "importance" => SearchSort::Importance,
+        "most_accessed" => SearchSort::MostAccessed,
+        _ => SearchSort::Recent,
+    }
+}
+
+fn parse_memory_type(type_str: &str) -> Option<MemoryType> {
+    match type_str {
+        "fact" => Some(MemoryType::Fact),
+        "preference" => Some(MemoryType::Preference),
+        "decision" => Some(MemoryType::Decision),
+        "identity" => Some(MemoryType::Identity),
+        "event" => Some(MemoryType::Event),
+        "observation" => Some(MemoryType::Observation),
+        "goal" => Some(MemoryType::Goal),
+        "todo" => Some(MemoryType::Todo),
+        _ => None,
+    }
+}
+
+/// List memories for an agent with sorting, filtering, and pagination.
+async fn list_memories(
+    State(state): State<Arc<ApiState>>,
+    Query(query): Query<MemoriesListQuery>,
+) -> Result<Json<MemoriesListResponse>, StatusCode> {
+    let searches = state.memory_searches.load();
+    let memory_search = searches.get(&query.agent_id).ok_or(StatusCode::NOT_FOUND)?;
+    let store = memory_search.store();
+
+    let limit = query.limit.min(200);
+    let sort = parse_sort(&query.sort);
+    let memory_type = query.memory_type.as_deref().and_then(parse_memory_type);
+
+    // Fetch limit + offset so we can paginate, then slice
+    let fetch_limit = limit + query.offset as i64;
+    let all = store.get_sorted(sort, fetch_limit, memory_type)
+        .await
+        .map_err(|error| {
+            tracing::warn!(%error, agent_id = %query.agent_id, "failed to list memories");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+
+    let total = all.len();
+    let memories = all.into_iter().skip(query.offset).collect();
+
+    Ok(Json(MemoriesListResponse { memories, total }))
+}
+
+#[derive(Deserialize)]
+struct MemoriesSearchQuery {
+    agent_id: String,
+    q: String,
+    #[serde(default = "default_search_limit")]
+    limit: usize,
+    #[serde(default)]
+    memory_type: Option<String>,
+}
+
+fn default_search_limit() -> usize {
+    20
+}
+
+/// Search memories using hybrid search (vector + FTS + graph).
+async fn search_memories(
+    State(state): State<Arc<ApiState>>,
+    Query(query): Query<MemoriesSearchQuery>,
+) -> Result<Json<MemoriesSearchResponse>, StatusCode> {
+    let searches = state.memory_searches.load();
+    let memory_search = searches.get(&query.agent_id).ok_or(StatusCode::NOT_FOUND)?;
+
+    let config = SearchConfig {
+        mode: SearchMode::Hybrid,
+        memory_type: query.memory_type.as_deref().and_then(parse_memory_type),
+        max_results: query.limit.min(100),
+        ..SearchConfig::default()
+    };
+
+    let results = memory_search.search(&query.q, &config)
+        .await
+        .map_err(|error| {
+            tracing::warn!(%error, agent_id = %query.agent_id, query = %query.q, "memory search failed");
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+
+    Ok(Json(MemoriesSearchResponse { results }))
 }
 
 // -- Static file serving --
