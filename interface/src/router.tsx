@@ -16,7 +16,7 @@ import { AgentTabs } from "@/components/AgentTabs";
 
 function RootLayout() {
 	const { liveStates, connectionState } = useLiveContext();
-	const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+	const [sidebarCollapsed, setSidebarCollapsed] = useState(true);
 
 	return (
 		<div className="flex h-screen bg-app">
