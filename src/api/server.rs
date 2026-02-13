@@ -42,7 +42,8 @@ pub async fn start_http_server(
         .route("/status", get(status))
         .route("/events", get(events_sse))
         .route("/channels", get(list_channels))
-        .route("/channels/messages", get(channel_messages));
+        .route("/channels/messages", get(channel_messages))
+        .route("/channels/status", get(channel_status));
 
     let app = Router::new()
         .nest("/api", api_routes)
@@ -97,6 +98,13 @@ async fn events_sse(
                             ApiEvent::InboundMessage { .. } => "inbound_message",
                             ApiEvent::OutboundMessage { .. } => "outbound_message",
                             ApiEvent::TypingState { .. } => "typing_state",
+                            ApiEvent::WorkerStarted { .. } => "worker_started",
+                            ApiEvent::WorkerStatusUpdate { .. } => "worker_status",
+                            ApiEvent::WorkerCompleted { .. } => "worker_completed",
+                            ApiEvent::BranchStarted { .. } => "branch_started",
+                            ApiEvent::BranchCompleted { .. } => "branch_completed",
+                            ApiEvent::ToolStarted { .. } => "tool_started",
+                            ApiEvent::ToolCompleted { .. } => "tool_completed",
                         };
                         yield Ok(axum::response::sse::Event::default()
                             .event(event_type)
@@ -198,6 +206,21 @@ async fn channel_messages(
     }
 
     Json(serde_json::json!({ "messages": [] }))
+}
+
+/// Get live status (active workers, branches, completed items) for all channels.
+async fn channel_status(State(state): State<Arc<ApiState>>) -> Json<serde_json::Value> {
+    let blocks = state.channel_status_blocks.read().await;
+    let mut result = serde_json::Map::new();
+
+    for (channel_id, status_block) in blocks.iter() {
+        let block = status_block.read().await;
+        if let Ok(value) = serde_json::to_value(&*block) {
+            result.insert(channel_id.clone(), value);
+        }
+    }
+
+    Json(serde_json::Value::Object(result))
 }
 
 // -- Static file serving --

@@ -596,6 +596,12 @@ async fn run(config: spacebot::config::Config, foreground: bool) -> anyhow::Resu
                         agent.config.logs_dir(),
                     );
 
+                    // Register the channel's status block with the API for snapshot queries
+                    api_state.register_channel_status(
+                        conversation_id.clone(),
+                        channel.state.status_block.clone(),
+                    ).await;
+
                     // Backfill recent message history from the platform
                     let backfill_count = agent.config.history_backfill_count();
                     if backfill_count > 0 {

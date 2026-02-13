@@ -51,10 +51,75 @@ export interface ProcessEventWrapper {
 	};
 }
 
+export interface WorkerStartedEvent {
+	type: "worker_started";
+	agent_id: string;
+	channel_id: string;
+	worker_id: string;
+	task: string;
+}
+
+export interface WorkerStatusEvent {
+	type: "worker_status";
+	agent_id: string;
+	channel_id: string;
+	worker_id: string;
+	status: string;
+}
+
+export interface WorkerCompletedEvent {
+	type: "worker_completed";
+	agent_id: string;
+	channel_id: string;
+	worker_id: string;
+	result: string;
+}
+
+export interface BranchStartedEvent {
+	type: "branch_started";
+	agent_id: string;
+	channel_id: string;
+	branch_id: string;
+	description: string;
+}
+
+export interface BranchCompletedEvent {
+	type: "branch_completed";
+	agent_id: string;
+	channel_id: string;
+	branch_id: string;
+	conclusion: string;
+}
+
+export interface ToolStartedEvent {
+	type: "tool_started";
+	agent_id: string;
+	channel_id: string;
+	process_type: string;
+	process_id: string;
+	tool_name: string;
+}
+
+export interface ToolCompletedEvent {
+	type: "tool_completed";
+	agent_id: string;
+	channel_id: string;
+	process_type: string;
+	process_id: string;
+	tool_name: string;
+}
+
 export type ApiEvent =
 	| InboundMessageEvent
 	| OutboundMessageEvent
 	| TypingStateEvent
+	| WorkerStartedEvent
+	| WorkerStatusEvent
+	| WorkerCompletedEvent
+	| BranchStartedEvent
+	| BranchCompletedEvent
+	| ToolStartedEvent
+	| ToolCompletedEvent
 	| ProcessEventWrapper;
 
 async function fetchJson<T>(path: string): Promise<T> {
@@ -78,6 +143,38 @@ export interface MessagesResponse {
 	messages: ConversationMessage[];
 }
 
+export interface WorkerStatusInfo {
+	id: string;
+	task: string;
+	status: string;
+	started_at: string;
+	notify_on_complete: boolean;
+	tool_calls: number;
+}
+
+export interface BranchStatusInfo {
+	id: string;
+	started_at: string;
+	description: string;
+}
+
+export interface CompletedItemInfo {
+	id: string;
+	item_type: "Branch" | "Worker";
+	description: string;
+	completed_at: string;
+	result_summary: string;
+}
+
+export interface StatusBlockSnapshot {
+	active_workers: WorkerStatusInfo[];
+	active_branches: BranchStatusInfo[];
+	completed_items: CompletedItemInfo[];
+}
+
+/** channel_id -> StatusBlockSnapshot */
+export type ChannelStatusResponse = Record<string, StatusBlockSnapshot>;
+
 export const api = {
 	status: () => fetchJson<StatusResponse>("/status"),
 	channels: () => fetchJson<ChannelsResponse>("/channels"),
@@ -85,5 +182,6 @@ export const api = {
 		fetchJson<MessagesResponse>(
 			`/channels/messages?channel_id=${encodeURIComponent(channelId)}&limit=${limit}`,
 		),
+	channelStatus: () => fetchJson<ChannelStatusResponse>("/channels/status"),
 	eventsUrl: `${API_BASE}/events`,
 };

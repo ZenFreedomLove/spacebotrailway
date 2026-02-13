@@ -6,6 +6,13 @@ import {
 	type InboundMessageEvent,
 	type OutboundMessageEvent,
 	type TypingStateEvent,
+	type WorkerStartedEvent,
+	type WorkerStatusEvent,
+	type WorkerCompletedEvent,
+	type BranchStartedEvent,
+	type BranchCompletedEvent,
+	type ToolStartedEvent,
+	type ToolCompletedEvent,
 } from "./api/client";
 import { useEventSource } from "./hooks/useEventSource";
 
@@ -27,14 +34,38 @@ interface ChatMessage {
 	timestamp: number;
 }
 
+interface ActiveWorker {
+	id: string;
+	task: string;
+	status: string;
+	startedAt: number;
+	toolCalls: number;
+	currentTool: string | null;
+}
+
+interface ActiveBranch {
+	id: string;
+	description: string;
+	startedAt: number;
+	currentTool: string | null;
+	lastTool: string | null;
+	toolCalls: number;
+}
+
 interface ChannelLiveState {
 	isTyping: boolean;
 	messages: ChatMessage[];
+	workers: Record<string, ActiveWorker>;
+	branches: Record<string, ActiveBranch>;
 	historyLoaded: boolean;
 }
 
 const VISIBLE_MESSAGES = 6;
 const MAX_MESSAGES = 50;
+
+function emptyLiveState(): ChannelLiveState {
+	return { isTyping: false, messages: [], workers: {}, branches: {}, historyLoaded: false };
+}
 
 function formatUptime(seconds: number): string {
 	const hours = Math.floor(seconds / 3600);
@@ -55,6 +86,12 @@ function formatTimeAgo(dateStr: string): string {
 
 function formatTimestamp(ts: number): string {
 	return new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
+
+function formatDuration(startMs: number): string {
+	const seconds = Math.floor((Date.now() - startMs) / 1000);
+	if (seconds < 60) return `${seconds}s`;
+	return `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
 }
 
 function platformIcon(platform: string): string {
@@ -78,6 +115,65 @@ function platformColor(platform: string): string {
 	}
 }
 
+function WorkerBadge({ worker }: { worker: ActiveWorker }) {
+	return (
+		<div className="flex items-center gap-2 rounded-md bg-amber-500/10 px-2.5 py-1.5 text-tiny">
+			<div className="h-1.5 w-1.5 animate-pulse rounded-full bg-amber-400" />
+			<div className="min-w-0 flex-1">
+				<div className="flex items-center gap-1.5">
+					<span className="font-medium text-amber-300">Worker</span>
+					<span className="truncate text-ink-dull">{worker.task}</span>
+				</div>
+				<div className="mt-0.5 flex items-center gap-2 text-ink-faint">
+					<span>{worker.status}</span>
+					{worker.currentTool && (
+						<>
+							<span className="text-ink-faint/50">·</span>
+							<span className="text-amber-400/70">{worker.currentTool}</span>
+						</>
+					)}
+					{worker.toolCalls > 0 && (
+						<>
+							<span className="text-ink-faint/50">·</span>
+							<span>{worker.toolCalls} tools</span>
+						</>
+					)}
+				</div>
+			</div>
+		</div>
+	);
+}
+
+function BranchBadge({ branch }: { branch: ActiveBranch }) {
+	const displayTool = branch.currentTool ?? branch.lastTool;
+	return (
+		<div className="flex items-center gap-2 rounded-md bg-violet-500/10 px-2.5 py-1.5 text-tiny">
+			<div className="h-1.5 w-1.5 animate-pulse rounded-full bg-violet-400" />
+			<div className="min-w-0 flex-1">
+				<div className="flex items-center gap-1.5">
+					<span className="font-medium text-violet-300">Branch</span>
+					<span className="truncate text-ink-dull">{branch.description}</span>
+				</div>
+				<div className="mt-0.5 flex items-center gap-2 text-ink-faint">
+					<span>{formatDuration(branch.startedAt)}</span>
+					{displayTool && (
+						<>
+							<span className="text-ink-faint/50">·</span>
+							<span className={branch.currentTool ? "text-violet-400/70" : "text-violet-400/40"}>{displayTool}</span>
+						</>
+					)}
+					{branch.toolCalls > 0 && (
+						<>
+							<span className="text-ink-faint/50">·</span>
+							<span>{branch.toolCalls} tools</span>
+						</>
+					)}
+				</div>
+			</div>
+		</div>
+	);
+}
+
 function ChannelCard({
 	channel,
 	liveState,
@@ -87,7 +183,10 @@ function ChannelCard({
 }) {
 	const isTyping = liveState?.isTyping ?? false;
 	const messages = liveState?.messages ?? [];
+	const workers = Object.values(liveState?.workers ?? {});
+	const branches = Object.values(liveState?.branches ?? {});
 	const visible = messages.slice(-VISIBLE_MESSAGES);
+	const hasActivity = workers.length > 0 || branches.length > 0;
 
 	return (
 		<div className="flex flex-col rounded-lg border border-app-line bg-app-darkBox transition-colors hover:border-app-line/80">
@@ -113,12 +212,35 @@ function ChannelCard({
 						<span className="text-tiny text-ink-faint">
 							{formatTimeAgo(channel.last_activity_at)}
 						</span>
+						{hasActivity && (
+							<span className="text-tiny text-ink-faint">
+								{workers.length > 0 && `${workers.length}w`}
+								{workers.length > 0 && branches.length > 0 && " "}
+								{branches.length > 0 && `${branches.length}b`}
+							</span>
+						)}
 					</div>
 				</div>
 				<div className="ml-2 flex-shrink-0">
-					<div className={`h-2 w-2 rounded-full ${isTyping ? "bg-accent animate-pulse" : "bg-green-500/60"}`} />
+					<div className={`h-2 w-2 rounded-full ${
+						hasActivity ? "bg-amber-400 animate-pulse" :
+						isTyping ? "bg-accent animate-pulse" :
+						"bg-green-500/60"
+					}`} />
 				</div>
 			</div>
+
+			{/* Active workers and branches */}
+			{hasActivity && (
+				<div className="flex flex-col gap-1.5 px-4 pb-2">
+					{workers.map((worker) => (
+						<WorkerBadge key={worker.id} worker={worker} />
+					))}
+					{branches.map((branch) => (
+						<BranchBadge key={branch.id} branch={branch} />
+					))}
+				</div>
+			)}
 
 			{/* Message stream */}
 			{visible.length > 0 && (
@@ -169,18 +291,11 @@ function Dashboard() {
 			setLiveStates((prev) => {
 				if (prev[channel.id]?.historyLoaded) return prev;
 
-				// Mark as loading to prevent duplicate fetches
 				const updated = {
 					...prev,
-					[channel.id]: {
-						...prev[channel.id],
-						isTyping: prev[channel.id]?.isTyping ?? false,
-						messages: prev[channel.id]?.messages ?? [],
-						historyLoaded: true,
-					},
+					[channel.id]: { ...(prev[channel.id] ?? emptyLiveState()), historyLoaded: true },
 				};
 
-				// Fetch history async
 				api.channelMessages(channel.id, MAX_MESSAGES).then((data) => {
 					const history: ChatMessage[] = data.messages.map((message) => ({
 						id: message.id,
@@ -193,7 +308,6 @@ function Dashboard() {
 					setLiveStates((current) => {
 						const existing = current[channel.id];
 						if (!existing) return current;
-						// Merge: history first, then any SSE messages that arrived during fetch
 						const sseMessages = existing.messages;
 						const lastHistoryTs = history.length > 0 ? history[history.length - 1].timestamp : 0;
 						const newSseMessages = sseMessages.filter((m) => m.timestamp > lastHistoryTs);
@@ -214,13 +328,54 @@ function Dashboard() {
 		}
 	}, [channels]);
 
+	// Fetch channel status snapshot once on mount for initial state
+	useEffect(() => {
+		api.channelStatus().then((statusMap) => {
+			setLiveStates((prev) => {
+				const next = { ...prev };
+				for (const [channelId, snapshot] of Object.entries(statusMap)) {
+					const existing = next[channelId] ?? emptyLiveState();
+					const workers: Record<string, ActiveWorker> = {};
+					for (const w of snapshot.active_workers) {
+						workers[w.id] = {
+							id: w.id,
+							task: w.task,
+							status: w.status,
+							startedAt: new Date(w.started_at).getTime(),
+							toolCalls: w.tool_calls,
+							currentTool: null,
+						};
+					}
+						const branches: Record<string, ActiveBranch> = {};
+						for (const b of snapshot.active_branches) {
+							branches[b.id] = {
+								id: b.id,
+								description: b.description,
+								startedAt: new Date(b.started_at).getTime(),
+								currentTool: null,
+								lastTool: null,
+								toolCalls: 0,
+							};
+						}
+					next[channelId] = { ...existing, workers, branches };
+				}
+				return next;
+			});
+		}).catch(() => {});
+	}, []);
+
+	const getState = useCallback((channelId: string) => {
+		return (prev: Record<string, ChannelLiveState>) =>
+			prev[channelId] ?? emptyLiveState();
+	}, []);
+
 	const pushMessage = useCallback((channelId: string, message: ChatMessage) => {
 		setLiveStates((prev) => {
-			const existing = prev[channelId] ?? { isTyping: false, messages: [], historyLoaded: false };
+			const existing = getState(channelId)(prev);
 			const messages = [...existing.messages, message].slice(-MAX_MESSAGES);
 			return { ...prev, [channelId]: { ...existing, messages } };
 		});
-	}, []);
+	}, [getState]);
 
 	const handleInboundMessage = useCallback((data: unknown) => {
 		const event = data as InboundMessageEvent;
@@ -242,38 +397,229 @@ function Dashboard() {
 			text: event.text,
 			timestamp: Date.now(),
 		});
-		setLiveStates((prev) => ({
-			...prev,
-			[event.channel_id]: {
-				...prev[event.channel_id],
-				isTyping: false,
-				messages: prev[event.channel_id]?.messages ?? [],
-				historyLoaded: prev[event.channel_id]?.historyLoaded ?? false,
-			},
-		}));
+		setLiveStates((prev) => {
+			const existing = getState(event.channel_id)(prev);
+			return { ...prev, [event.channel_id]: { ...existing, isTyping: false } };
+		});
 		queryClient.invalidateQueries({ queryKey: ["channels"] });
-	}, [pushMessage]);
+	}, [pushMessage, getState]);
 
 	const handleTypingState = useCallback((data: unknown) => {
 		const event = data as TypingStateEvent;
-		setLiveStates((prev) => ({
-			...prev,
-			[event.channel_id]: {
-				...prev[event.channel_id],
-				isTyping: event.is_typing,
-				messages: prev[event.channel_id]?.messages ?? [],
-				historyLoaded: prev[event.channel_id]?.historyLoaded ?? false,
-			},
-		}));
+		setLiveStates((prev) => {
+			const existing = getState(event.channel_id)(prev);
+			return { ...prev, [event.channel_id]: { ...existing, isTyping: event.is_typing } };
+		});
+	}, [getState]);
+
+	const handleWorkerStarted = useCallback((data: unknown) => {
+		const event = data as WorkerStartedEvent;
+		setLiveStates((prev) => {
+			const existing = getState(event.channel_id)(prev);
+			return {
+				...prev,
+				[event.channel_id]: {
+					...existing,
+					workers: {
+						...existing.workers,
+						[event.worker_id]: {
+							id: event.worker_id,
+							task: event.task,
+							status: "starting",
+							startedAt: Date.now(),
+							toolCalls: 0,
+							currentTool: null,
+						},
+					},
+				},
+			};
+		});
+	}, [getState]);
+
+	const handleWorkerStatus = useCallback((data: unknown) => {
+		const event = data as WorkerStatusEvent;
+		setLiveStates((prev) => {
+			for (const [channelId, state] of Object.entries(prev)) {
+				const worker = state.workers[event.worker_id];
+				if (worker) {
+					return {
+						...prev,
+						[channelId]: {
+							...state,
+							workers: {
+								...state.workers,
+								[event.worker_id]: { ...worker, status: event.status },
+							},
+						},
+					};
+				}
+			}
+			return prev;
+		});
+	}, []);
+
+	const handleWorkerCompleted = useCallback((data: unknown) => {
+		const event = data as WorkerCompletedEvent;
+		setLiveStates((prev) => {
+			for (const [channelId, state] of Object.entries(prev)) {
+				if (state.workers[event.worker_id]) {
+					const { [event.worker_id]: _, ...remainingWorkers } = state.workers;
+					return {
+						...prev,
+						[channelId]: { ...state, workers: remainingWorkers },
+					};
+				}
+			}
+			return prev;
+		});
+	}, []);
+
+	const handleBranchStarted = useCallback((data: unknown) => {
+		const event = data as BranchStartedEvent;
+		setLiveStates((prev) => {
+			const existing = getState(event.channel_id)(prev);
+			return {
+				...prev,
+				[event.channel_id]: {
+					...existing,
+					branches: {
+						...existing.branches,
+						[event.branch_id]: {
+							id: event.branch_id,
+							description: event.description || "thinking...",
+							startedAt: Date.now(),
+							currentTool: null,
+							lastTool: null,
+							toolCalls: 0,
+						},
+					},
+				},
+			};
+		});
+	}, [getState]);
+
+	const handleBranchCompleted = useCallback((data: unknown) => {
+		const event = data as BranchCompletedEvent;
+		setLiveStates((prev) => {
+			for (const [channelId, state] of Object.entries(prev)) {
+				if (state.branches[event.branch_id]) {
+					const { [event.branch_id]: _, ...remainingBranches } = state.branches;
+					return {
+						...prev,
+						[channelId]: { ...state, branches: remainingBranches },
+					};
+				}
+			}
+			return prev;
+		});
+	}, []);
+
+	const handleToolStarted = useCallback((data: unknown) => {
+		const event = data as ToolStartedEvent;
+		setLiveStates((prev) => {
+			for (const [channelId, state] of Object.entries(prev)) {
+				if (event.process_type === "worker" && state.workers[event.process_id]) {
+					const worker = state.workers[event.process_id];
+					return {
+						...prev,
+						[channelId]: {
+							...state,
+							workers: {
+								...state.workers,
+								[event.process_id]: { ...worker, currentTool: event.tool_name },
+							},
+						},
+					};
+				}
+				if (event.process_type === "branch" && state.branches[event.process_id]) {
+					const branch = state.branches[event.process_id];
+					return {
+						...prev,
+						[channelId]: {
+							...state,
+							branches: {
+								...state.branches,
+								[event.process_id]: { ...branch, currentTool: event.tool_name },
+							},
+						},
+					};
+				}
+			}
+			return prev;
+		});
+	}, []);
+
+	const handleToolCompleted = useCallback((data: unknown) => {
+		const event = data as ToolCompletedEvent;
+		setLiveStates((prev) => {
+			for (const [channelId, state] of Object.entries(prev)) {
+				if (event.process_type === "worker" && state.workers[event.process_id]) {
+					const worker = state.workers[event.process_id];
+					return {
+						...prev,
+						[channelId]: {
+							...state,
+							workers: {
+								...state.workers,
+								[event.process_id]: {
+									...worker,
+									currentTool: null,
+									toolCalls: worker.toolCalls + 1,
+								},
+							},
+						},
+					};
+				}
+				if (event.process_type === "branch" && state.branches[event.process_id]) {
+					const branch = state.branches[event.process_id];
+					return {
+						...prev,
+						[channelId]: {
+							...state,
+							branches: {
+								...state.branches,
+								[event.process_id]: {
+									...branch,
+									currentTool: null,
+									lastTool: event.tool_name,
+									toolCalls: branch.toolCalls + 1,
+								},
+							},
+						},
+					};
+				}
+			}
+			return prev;
+		});
 	}, []);
 
 	const handlers = useMemo(() => ({
 		inbound_message: handleInboundMessage,
 		outbound_message: handleOutboundMessage,
 		typing_state: handleTypingState,
-	}), [handleInboundMessage, handleOutboundMessage, handleTypingState]);
+		worker_started: handleWorkerStarted,
+		worker_status: handleWorkerStatus,
+		worker_completed: handleWorkerCompleted,
+		branch_started: handleBranchStarted,
+		branch_completed: handleBranchCompleted,
+		tool_started: handleToolStarted,
+		tool_completed: handleToolCompleted,
+	}), [
+		handleInboundMessage, handleOutboundMessage, handleTypingState,
+		handleWorkerStarted, handleWorkerStatus, handleWorkerCompleted,
+		handleBranchStarted, handleBranchCompleted,
+		handleToolStarted, handleToolCompleted,
+	]);
 
 	useEventSource(api.eventsUrl, { handlers });
+
+	// Count totals for header
+	const totalWorkers = Object.values(liveStates).reduce(
+		(sum, s) => sum + Object.keys(s.workers).length, 0,
+	);
+	const totalBranches = Object.values(liveStates).reduce(
+		(sum, s) => sum + Object.keys(s.branches).length, 0,
+	);
 
 	return (
 		<div className="min-h-screen bg-app">
@@ -284,20 +630,33 @@ function Dashboard() {
 						<h1 className="font-plex text-lg font-semibold text-ink">Spacebot</h1>
 						<p className="text-tiny text-ink-faint">Control Interface</p>
 					</div>
-					{statusData && (
-						<div className="flex items-center gap-3 text-sm">
-							<div className="flex items-center gap-1.5">
-								<div className="h-2 w-2 rounded-full bg-green-500" />
-								<span className="text-ink-dull">Running</span>
+					<div className="flex items-center gap-4 text-sm">
+						{statusData && (
+							<>
+								<div className="flex items-center gap-1.5">
+									<div className="h-2 w-2 rounded-full bg-green-500" />
+									<span className="text-ink-dull">Running</span>
+								</div>
+								<span className="text-ink-faint">
+									{formatUptime(statusData.uptime_seconds)}
+								</span>
+							</>
+						)}
+						{(totalWorkers > 0 || totalBranches > 0) && (
+							<div className="flex items-center gap-2 text-tiny">
+								{totalWorkers > 0 && (
+									<span className="rounded-md bg-amber-500/15 px-1.5 py-0.5 text-amber-400">
+										{totalWorkers} worker{totalWorkers !== 1 ? "s" : ""}
+									</span>
+								)}
+								{totalBranches > 0 && (
+									<span className="rounded-md bg-violet-500/15 px-1.5 py-0.5 text-violet-400">
+										{totalBranches} branch{totalBranches !== 1 ? "es" : ""}
+									</span>
+								)}
 							</div>
-							<span className="text-ink-faint">
-								{formatUptime(statusData.uptime_seconds)}
-							</span>
-							<span className="text-ink-faint">
-								PID {statusData.pid}
-							</span>
-						</div>
-					)}
+						)}
+					</div>
 				</div>
 			</div>
 

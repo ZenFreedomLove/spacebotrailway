@@ -4,7 +4,7 @@ use crate::{BranchId, ProcessEvent, ProcessId, WorkerId};
 use chrono::{DateTime, Utc};
 
 /// Live status block injected into channel context.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize)]
 pub struct StatusBlock {
     /// Currently running branches.
     pub active_branches: Vec<BranchStatus>,
@@ -15,7 +15,7 @@ pub struct StatusBlock {
 }
 
 /// Status of an active branch.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct BranchStatus {
     pub id: BranchId,
     pub started_at: DateTime<Utc>,
@@ -23,7 +23,7 @@ pub struct BranchStatus {
 }
 
 /// Status of an active worker.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct WorkerStatus {
     pub id: WorkerId,
     pub task: String,
@@ -34,7 +34,7 @@ pub struct WorkerStatus {
 }
 
 /// Recently completed work item.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct CompletedItem {
     pub id: String,
     pub item_type: CompletedItemType,
@@ -44,7 +44,7 @@ pub struct CompletedItem {
 }
 
 /// Type of completed item.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 pub enum CompletedItemType {
     Branch,
     Worker,

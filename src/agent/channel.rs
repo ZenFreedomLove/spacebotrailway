@@ -550,7 +550,7 @@ pub async fn spawn_branch_from_state(
         )
         .expect("failed to render branch prompt");
 
-    spawn_branch(state, &description, &description, &system_prompt, "thinking...")
+    spawn_branch(state, &description, &description, &system_prompt, &description)
         .await
 }
 
@@ -638,6 +638,13 @@ async fn spawn_branch(
         status.add_branch(branch_id, status_label);
     }
 
+    state.deps.event_tx.send(crate::ProcessEvent::BranchStarted {
+        agent_id: state.deps.agent_id.clone(),
+        branch_id,
+        channel_id: state.channel_id.clone(),
+        description: status_label.to_string(),
+    }).ok();
+
     tracing::info!(branch_id = %branch_id, description = %status_label, "branch spawned");
 
     Ok(branch_id)
@@ -717,7 +724,14 @@ pub async fn spawn_worker_from_state(
         let mut status = state.status_block.write().await;
         status.add_worker(worker_id, &task, false);
     }
-    
+
+    state.deps.event_tx.send(crate::ProcessEvent::WorkerStarted {
+        agent_id: state.deps.agent_id.clone(),
+        worker_id,
+        channel_id: Some(state.channel_id.clone()),
+        task: task.clone(),
+    }).ok();
+
     tracing::info!(worker_id = %worker_id, task = %task, "worker spawned");
     
     Ok(worker_id)
@@ -784,10 +798,18 @@ pub async fn spawn_opencode_worker_from_state(
         },
     );
 
+    let opencode_task = format!("[opencode] {task}");
     {
         let mut status = state.status_block.write().await;
-        status.add_worker(worker_id, &format!("[opencode] {task}"), false);
+        status.add_worker(worker_id, &opencode_task, false);
     }
+
+    state.deps.event_tx.send(crate::ProcessEvent::WorkerStarted {
+        agent_id: state.deps.agent_id.clone(),
+        worker_id,
+        channel_id: Some(state.channel_id.clone()),
+        task: opencode_task,
+    }).ok();
 
     tracing::info!(worker_id = %worker_id, task = %task, "OpenCode worker spawned");
 

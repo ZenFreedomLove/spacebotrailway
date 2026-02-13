@@ -1,11 +1,12 @@
 //! Shared state for the HTTP API.
 
-use crate::ProcessEvent;
+use crate::agent::status::StatusBlock;
+use crate::{ProcessEvent, ProcessId};
 use serde::Serialize;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, RwLock};
 
 /// State shared across all API handlers.
 pub struct ApiState {
@@ -14,6 +15,8 @@ pub struct ApiState {
     pub event_tx: broadcast::Sender<ApiEvent>,
     /// Per-agent SQLite pools for querying channel/conversation data.
     pub agent_pools: arc_swap::ArcSwap<HashMap<String, sqlx::SqlitePool>>,
+    /// Live status blocks for active channels, keyed by channel_id.
+    pub channel_status_blocks: RwLock<HashMap<String, Arc<tokio::sync::RwLock<StatusBlock>>>>,
 }
 
 /// Events sent to SSE clients. Wraps ProcessEvents with agent context.
@@ -44,6 +47,57 @@ pub enum ApiEvent {
         channel_id: String,
         is_typing: bool,
     },
+    /// A worker was started.
+    WorkerStarted {
+        agent_id: String,
+        channel_id: String,
+        worker_id: String,
+        task: String,
+    },
+    /// A worker's status changed.
+    WorkerStatusUpdate {
+        agent_id: String,
+        channel_id: String,
+        worker_id: String,
+        status: String,
+    },
+    /// A worker completed.
+    WorkerCompleted {
+        agent_id: String,
+        channel_id: String,
+        worker_id: String,
+        result: String,
+    },
+    /// A branch was started.
+    BranchStarted {
+        agent_id: String,
+        channel_id: String,
+        branch_id: String,
+        description: String,
+    },
+    /// A branch completed with a conclusion.
+    BranchCompleted {
+        agent_id: String,
+        channel_id: String,
+        branch_id: String,
+        conclusion: String,
+    },
+    /// A tool call started on a process.
+    ToolStarted {
+        agent_id: String,
+        channel_id: String,
+        process_type: String,
+        process_id: String,
+        tool_name: String,
+    },
+    /// A tool call completed on a process.
+    ToolCompleted {
+        agent_id: String,
+        channel_id: String,
+        process_type: String,
+        process_id: String,
+        tool_name: String,
+    },
 }
 
 impl ApiState {
@@ -53,7 +107,28 @@ impl ApiState {
             started_at: Instant::now(),
             event_tx,
             agent_pools: arc_swap::ArcSwap::from_pointee(HashMap::new()),
+            channel_status_blocks: RwLock::new(HashMap::new()),
         }
+    }
+
+    /// Register a channel's status block so the API can read snapshots.
+    pub async fn register_channel_status(
+        &self,
+        channel_id: String,
+        status_block: Arc<tokio::sync::RwLock<StatusBlock>>,
+    ) {
+        self.channel_status_blocks
+            .write()
+            .await
+            .insert(channel_id, status_block);
+    }
+
+    /// Remove a channel's status block when it's dropped.
+    pub async fn unregister_channel_status(&self, channel_id: &str) {
+        self.channel_status_blocks
+            .write()
+            .await
+            .remove(channel_id);
     }
 
     /// Register an agent's event stream. Spawns a task that forwards
@@ -68,12 +143,76 @@ impl ApiState {
             loop {
                 match agent_event_rx.recv().await {
                     Ok(event) => {
-                        let api_event = ApiEvent::ProcessEvent {
+                        // Translate ProcessEvents into typed ApiEvents
+                        match &event {
+                            ProcessEvent::WorkerStarted { worker_id, channel_id, task, .. } => {
+                                api_tx.send(ApiEvent::WorkerStarted {
+                                    agent_id: agent_id.clone(),
+                                    channel_id: channel_id.as_deref().unwrap_or("").to_string(),
+                                    worker_id: worker_id.to_string(),
+                                    task: task.clone(),
+                                }).ok();
+                            }
+                            ProcessEvent::BranchStarted { branch_id, channel_id, description, .. } => {
+                                api_tx.send(ApiEvent::BranchStarted {
+                                    agent_id: agent_id.clone(),
+                                    channel_id: channel_id.to_string(),
+                                    branch_id: branch_id.to_string(),
+                                    description: description.clone(),
+                                }).ok();
+                            }
+                            ProcessEvent::WorkerStatus { worker_id, channel_id, status, .. } => {
+                                api_tx.send(ApiEvent::WorkerStatusUpdate {
+                                    agent_id: agent_id.clone(),
+                                    channel_id: channel_id.as_deref().unwrap_or("").to_string(),
+                                    worker_id: worker_id.to_string(),
+                                    status: status.clone(),
+                                }).ok();
+                            }
+                            ProcessEvent::WorkerComplete { worker_id, channel_id, result, .. } => {
+                                api_tx.send(ApiEvent::WorkerCompleted {
+                                    agent_id: agent_id.clone(),
+                                    channel_id: channel_id.as_deref().unwrap_or("").to_string(),
+                                    worker_id: worker_id.to_string(),
+                                    result: result.clone(),
+                                }).ok();
+                            }
+                            ProcessEvent::BranchResult { branch_id, channel_id, conclusion, .. } => {
+                                api_tx.send(ApiEvent::BranchCompleted {
+                                    agent_id: agent_id.clone(),
+                                    channel_id: channel_id.to_string(),
+                                    branch_id: branch_id.to_string(),
+                                    conclusion: conclusion.clone(),
+                                }).ok();
+                            }
+                            ProcessEvent::ToolStarted { process_id, tool_name, .. } => {
+                                let (process_type, id_str, channel_id) = process_id_info(process_id);
+                                api_tx.send(ApiEvent::ToolStarted {
+                                    agent_id: agent_id.clone(),
+                                    channel_id,
+                                    process_type,
+                                    process_id: id_str,
+                                    tool_name: tool_name.clone(),
+                                }).ok();
+                            }
+                            ProcessEvent::ToolCompleted { process_id, tool_name, .. } => {
+                                let (process_type, id_str, channel_id) = process_id_info(process_id);
+                                api_tx.send(ApiEvent::ToolCompleted {
+                                    agent_id: agent_id.clone(),
+                                    channel_id,
+                                    process_type,
+                                    process_id: id_str,
+                                    tool_name: tool_name.clone(),
+                                }).ok();
+                            }
+                            _ => {}
+                        }
+
+                        // Also send the raw event for anything the frontend wants
+                        api_tx.send(ApiEvent::ProcessEvent {
                             agent_id: agent_id.clone(),
                             event,
-                        };
-                        // Ignore send errors (no SSE clients connected)
-                        api_tx.send(api_event).ok();
+                        }).ok();
                     }
                     Err(broadcast::error::RecvError::Lagged(count)) => {
                         tracing::debug!(agent_id = %agent_id, count, "API event forwarder lagged, skipped events");
@@ -87,5 +226,20 @@ impl ApiState {
     /// Set the SQLite pools for all agents.
     pub fn set_agent_pools(&self, pools: HashMap<String, sqlx::SqlitePool>) {
         self.agent_pools.store(Arc::new(pools));
+    }
+}
+
+/// Extract (process_type, id_string, channel_id) from a ProcessId.
+fn process_id_info(id: &ProcessId) -> (String, String, String) {
+    match id {
+        ProcessId::Channel(channel_id) => {
+            ("channel".into(), channel_id.to_string(), channel_id.to_string())
+        }
+        ProcessId::Branch(branch_id) => {
+            ("branch".into(), branch_id.to_string(), String::new())
+        }
+        ProcessId::Worker(worker_id) => {
+            ("worker".into(), worker_id.to_string(), String::new())
+        }
     }
 }

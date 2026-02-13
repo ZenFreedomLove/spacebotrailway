@@ -83,11 +83,23 @@ impl std::fmt::Display for ProcessType {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ProcessEvent {
+    BranchStarted {
+        agent_id: AgentId,
+        branch_id: BranchId,
+        channel_id: ChannelId,
+        description: String,
+    },
     BranchResult {
         agent_id: AgentId,
         branch_id: BranchId,
         channel_id: ChannelId,
         conclusion: String,
+    },
+    WorkerStarted {
+        agent_id: AgentId,
+        worker_id: WorkerId,
+        channel_id: Option<ChannelId>,
+        task: String,
     },
     WorkerStatus {
         agent_id: AgentId,
