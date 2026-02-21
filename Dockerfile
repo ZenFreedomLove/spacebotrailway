@@ -12,9 +12,9 @@ RUN curl -fsSL https://bun.sh/install | bash
 ENV PATH="/root/.bun/bin:${PATH}"
 WORKDIR /build
 COPY Cargo.toml Cargo.lock ./
-RUN --mount=type=cache,id=cargo-registry,target=/usr/local/cargo/registry \
-    --mount=type=cache,id=cargo-git,target=/usr/local/cargo/git \
-    --mount=type=cache,id=build-target,target=/build/target \
+RUN --mount=type=cache,id=${RAILWAY_CACHE_KEY}-cargo-registry,target=/usr/local/cargo/registry \
+    --mount=type=cache,id=${RAILWAY_CACHE_KEY}-cargo-git,target=/usr/local/cargo/git \
+    --mount=type=cache,id=${RAILWAY_CACHE_KEY}-build-target,target=/build/target \
     mkdir src && echo "fn main() {}" > src/main.rs && touch src/lib.rs \
     && cargo build --release \
     && rm -rf src
